@@ -172,17 +172,12 @@ export function narratePlanGenerated(plan: TestPlan): string {
 }
 
 export function narratePlanStepStarting(step: TestPlanStep, totalSteps: number): string {
-  const substeps = step.test_steps && step.test_steps.length > 0
-    ? ` [${step.test_steps.length} test steps: ${step.test_steps.slice(0, 2).join(", ")}${step.test_steps.length > 2 ? "..." : ""}]`
-    : "";
-  return `Test case ${step.step_id}/${totalSteps}: "${step.title}" — ${step.description.substring(0, 100)}${substeps}`;
+  return `Now testing: ${step.title} (${step.step_id}/${totalSteps}) — ${step.description.substring(0, 120)}`;
 }
 
-export function narratePlanStepCompleted(step: TestPlanStep, passed: boolean): string {
-  if (passed) {
-    return `Step ${step.step_id} "${step.title}" passed. ${step.actual_outcome || step.expected_outcome}`;
-  }
-  return `Step ${step.step_id} "${step.title}" failed. ${step.actual_outcome || "Did not meet expected outcome."}`;
+export function narratePlanStepCompleted(step: TestPlanStep, _passed: boolean): string {
+  const actions = step.actions_taken || 0;
+  return `Finished "${step.title}" after ${actions} action${actions === 1 ? "" : "s"}.`;
 }
 
 export function narratePlanSummary(plan: TestPlan): string {

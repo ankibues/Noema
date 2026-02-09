@@ -27,44 +27,43 @@ const styles = {
     padding: 12,
     display: "flex",
     flexDirection: "column" as const,
-    gap: 6,
+    gap: 4,
   },
-  actionCard: (success: boolean) => ({
-    padding: "8px 12px",
-    backgroundColor: success ? "#0f1f0f" : "#1f0f0f",
-    border: `1px solid ${success ? "#1a3a1a" : "#3a1a1a"}`,
-    borderRadius: 4,
-  }),
-  actionType: {
-    fontSize: 12,
-    fontWeight: 600,
-    color: "#60a5fa",
-    marginBottom: 4,
-  },
-  actionDetail: {
-    fontSize: 11,
-    color: "#9ca3af",
-    lineHeight: 1.5,
-  },
-  statusBadge: (success: boolean) => ({
-    display: "inline-block",
-    fontSize: 10,
-    fontWeight: 600,
-    padding: "1px 6px",
-    borderRadius: 3,
-    backgroundColor: success ? "#166534" : "#991b1b",
-    color: success ? "#86efac" : "#fca5a5",
-    marginLeft: 8,
-  }),
-  planStepDivider: {
-    padding: "4px 10px",
+  testCaseLabel: {
+    padding: "6px 10px",
     fontSize: 10,
     fontWeight: 600,
     color: "#818cf8",
     borderLeft: "2px solid #818cf8",
-    marginTop: 4,
+    marginTop: 8,
     marginBottom: 2,
     letterSpacing: 0.5,
+  },
+  actionRow: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 8,
+    padding: "4px 10px 4px 16px",
+  },
+  actionIcon: (success: boolean) => ({
+    fontSize: 10,
+    fontWeight: 700,
+    color: success ? "#34d399" : "#f87171",
+    minWidth: 14,
+    marginTop: 2,
+  }),
+  actionText: {
+    fontSize: 12,
+    color: "#d4d4d8",
+    lineHeight: 1.5,
+    flex: 1,
+    wordBreak: "break-word" as const,
+  },
+  actionDuration: {
+    fontSize: 10,
+    color: "#4b5563",
+    whiteSpace: "nowrap" as const,
+    marginTop: 2,
   },
   empty: {
     flex: 1,
@@ -76,52 +75,92 @@ const styles = {
   },
 };
 
-export default function BrowserFeed({ events, hideHeader }: Props) {
-  // Extract action events AND plan step events for context
-  const relevantEvents = events.filter(
-    (e) =>
-      e.type === "action_started" ||
-      e.type === "action_completed" ||
-      e.type === "plan_step_started" ||
-      e.type === "plan_step_completed"
-  );
+/** Friendly labels for action types */
+function formatActionType(type: string): string {
+  switch (type) {
+    case "navigate_to_url": return "Navigate";
+    case "click_element": return "Click";
+    case "fill_input": return "Fill";
+    case "submit_form": return "Submit";
+    case "check_element_visible": return "Check visible";
+    case "capture_screenshot": return "Screenshot";
+    case "wait_for_network_idle": return "Wait";
+    case "no_op": return "Pause";
+    default: return type.replace(/_/g, " ");
+  }
+}
 
-  // Build a timeline of actions grouped by plan step
+/** Extract a short description from the action_started message */
+function actionSummary(event: NarrationEvent): string {
+  // The message from narration_formatter is already a nice first-person sentence.
+  // Strip the "I'm " prefix to make it more compact for the browser feed.
+  let msg = event.message || "";
+  if (msg.startsWith("I'm ")) {
+    msg = msg.substring(4);
+    // Capitalize first letter
+    msg = msg.charAt(0).toUpperCase() + msg.slice(1);
+  }
+  return msg;
+}
+
+export default function BrowserFeed({ events, hideHeader }: Props) {
+  // Build timeline: only browser actions, grouped by test case
   type TimelineItem =
-    | { kind: "step_start"; title: string; stepId: number }
-    | { kind: "action"; started: NarrationEvent; completed?: NarrationEvent }
-    | { kind: "step_end"; stepId: number; result: string };
+    | { kind: "test_case"; title: string }
+    | { kind: "action"; message: string; success: boolean; durationMs?: number; actionType: string };
 
   const timeline: TimelineItem[] = [];
   let pendingAction: NarrationEvent | null = null;
 
+  const relevantEvents = events.filter(
+    (e) =>
+      e.type === "action_started" ||
+      e.type === "action_completed" ||
+      e.type === "plan_step_started"
+  );
+
   for (const event of relevantEvents) {
     if (event.type === "plan_step_started") {
-      timeline.push({
-        kind: "step_start",
-        title: (event.data?.title as string) || `Step ${event.data?.step_id}`,
-        stepId: event.data?.step_id as number,
-      });
-    } else if (event.type === "plan_step_completed") {
-      timeline.push({
-        kind: "step_end",
-        stepId: event.data?.step_id as number,
-        result: (event.data?.result as string) || "done",
-      });
+      // Subtle grouping header — just the test case name, no result
+      const title = (event.data?.title as string) || `Test ${event.data?.step_id}`;
+      timeline.push({ kind: "test_case", title });
     } else if (event.type === "action_started") {
+      // Flush any pending action that never got a completion event
       if (pendingAction) {
-        timeline.push({ kind: "action", started: pendingAction });
+        timeline.push({
+          kind: "action",
+          message: actionSummary(pendingAction),
+          success: true,
+          actionType: (pendingAction.data?.action_type as string) || "action",
+        });
       }
       pendingAction = event;
     } else if (event.type === "action_completed") {
-      if (pendingAction) {
-        timeline.push({ kind: "action", started: pendingAction, completed: event });
-        pendingAction = null;
-      }
+      const success = event.message?.includes("uccess") ?? false;
+      const duration = event.data?.duration_ms as number | undefined;
+      const actionType = pendingAction
+        ? (pendingAction.data?.action_type as string) || "action"
+        : "action";
+      const msg = pendingAction ? actionSummary(pendingAction) : (event.message || "Action");
+
+      timeline.push({
+        kind: "action",
+        message: msg,
+        success,
+        durationMs: duration,
+        actionType,
+      });
+      pendingAction = null;
     }
   }
+  // Flush last pending action
   if (pendingAction) {
-    timeline.push({ kind: "action", started: pendingAction });
+    timeline.push({
+      kind: "action",
+      message: actionSummary(pendingAction),
+      success: true,
+      actionType: (pendingAction.data?.action_type as string) || "action",
+    });
   }
 
   return (
@@ -136,48 +175,29 @@ export default function BrowserFeed({ events, hideHeader }: Props) {
           </div>
         )}
         {timeline.map((item, i) => {
-          if (item.kind === "step_start") {
+          if (item.kind === "test_case") {
             return (
-              <div key={i} style={styles.planStepDivider}>
-                ▸ Step {item.stepId}: {item.title}
+              <div key={i} style={styles.testCaseLabel}>
+                🧪 {item.title}
               </div>
             );
           }
-          if (item.kind === "step_end") {
-            return (
-              <div key={i} style={{
-                ...styles.planStepDivider,
-                color: item.result === "pass" ? "#22c55e" : item.result === "fail" ? "#ef4444" : "#6b7280",
-                borderLeftColor: item.result === "pass" ? "#22c55e" : item.result === "fail" ? "#ef4444" : "#6b7280",
-                fontSize: 9,
-              }}>
-                {item.result === "pass" ? "✓" : item.result === "fail" ? "✗" : "—"} Step {item.stepId} {item.result}
-              </div>
-            );
-          }
-          // action
-          const success = item.completed?.message.includes("uccess") ?? false;
-          const duration = item.completed?.data?.duration_ms as number | undefined;
-          const actionType = (item.started.data?.action_type as string) || "action";
-
+          // Browser action row — compact, one line
           return (
-            <div key={i} style={styles.actionCard(success)}>
-              <div style={styles.actionType}>
-                {actionType.replace(/_/g, " ").toUpperCase()}
-                {item.completed && (
-                  <span style={styles.statusBadge(success)}>
-                    {success ? "OK" : "FAIL"}
-                  </span>
-                )}
-                {duration != null && (
-                  <span style={{ color: "#6b7280", fontSize: 10, marginLeft: 8, fontWeight: 400 }}>
-                    {Math.round(duration)}ms
-                  </span>
-                )}
-              </div>
-              <div style={styles.actionDetail}>{item.started.message}</div>
-              {item.completed && (
-                <div style={styles.actionDetail}>{item.completed.message}</div>
+            <div key={i} style={styles.actionRow}>
+              <span style={styles.actionIcon(item.success)}>
+                {item.success ? "●" : "✗"}
+              </span>
+              <span style={styles.actionText}>
+                <strong style={{ color: "#60a5fa", fontSize: 11 }}>
+                  {formatActionType(item.actionType)}
+                </strong>{" "}
+                {item.message}
+              </span>
+              {item.durationMs != null && (
+                <span style={styles.actionDuration}>
+                  {Math.round(item.durationMs)}ms
+                </span>
               )}
             </div>
           );
