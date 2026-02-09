@@ -110,8 +110,14 @@ export class RolloutManager {
       }
     }
 
-    // Close browser session
-    await this.decisionEngine.close(`${runId}_rollout_0`);
+    // Close all rollout browser sessions
+    for (let i = 0; i < this.config.rolloutCount; i++) {
+      try {
+        await this.decisionEngine.close(`${runId}_rollout_${i}`);
+      } catch {
+        // Session may not exist if rollout failed
+      }
+    }
 
     const rolloutSet: RolloutSet = {
       set_id: setId,

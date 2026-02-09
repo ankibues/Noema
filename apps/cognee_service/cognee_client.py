@@ -69,20 +69,20 @@ class CogneeClient:
         # Configure LLM API key first
         _configure_llm()
         
-        # Ensure data directory exists
-        Path(self.data_dir).mkdir(parents=True, exist_ok=True)
+        # CRITICAL: Use absolute path to avoid Cognee v0.5+ path resolution bugs
+        # Cognee's multi-user storage paths lose the relative prefix when reading back
+        data_path = Path(self.data_dir).resolve()
+        data_path.mkdir(parents=True, exist_ok=True)
         
-        # Configure Cognee to use local storage
+        # Configure Cognee to use local storage with absolute path
         # LanceDB and Kuzu are the defaults - no cloud services
-        cognee.config.data_root_directory(self.data_dir)
+        cognee.config.data_root_directory(str(data_path))
         
-        # Reset on first init to ensure clean state
-        # In production, you might want to preserve state
-        # await cognee.prune.prune_data()
-        # await cognee.prune.prune_system(metadata=True)
+        # Disable multi-user access control to avoid UUID-based path issues
+        os.environ.setdefault("ENABLE_BACKEND_ACCESS_CONTROL", "false")
         
         self._initialized = True
-        logger.info(f"Cognee initialized with data directory: {self.data_dir}")
+        logger.info(f"Cognee initialized with data directory: {data_path}")
     
     async def ingest(
         self,

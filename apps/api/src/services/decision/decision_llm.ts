@@ -14,6 +14,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { DecisionPromptInput } from "./types.js";
 import type { DecisionOutput, BrowserActionType } from "./action_types.js";
+import { fetchWithRetry, extractJSON } from "../llm_utils.js";
 
 export interface DecisionLLMConfig {
   provider: "gemini" | "openai";
@@ -23,7 +24,7 @@ export interface DecisionLLMConfig {
 
 const DEFAULT_CONFIG: DecisionLLMConfig = {
   provider: "gemini",
-  model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+  model: process.env.GEMINI_MODEL || "gemini-3-flash-preview",
 };
 
 /**
@@ -75,6 +76,43 @@ export async function callDecisionLLM(
   // Load prompt template
   const promptTemplate = await loadPromptTemplate();
 
+  // Build visual context section if available
+  const visualSection = input.visual_context
+    ? `\n---\n\nCURRENT PAGE (from Gemini Vision):\n${input.visual_context}\n`
+    : "";
+
+  // Build credentials section if available (injected from env, never narrated)
+  let credentialsSection = "";
+  if (input.credentials) {
+    const credParts: string[] = [];
+    if (input.credentials.username) credParts.push(`  username: "${input.credentials.username}"`);
+    if (input.credentials.password) credParts.push(`  password: "${input.credentials.password}"`);
+    if (input.credentials.extras) {
+      for (const [key, value] of Object.entries(input.credentials.extras)) {
+        credParts.push(`  ${key}: "${value}"`);
+      }
+    }
+    if (credParts.length > 0) {
+      credentialsSection = `\n---\n\nTEST CREDENTIALS (use these when filling login/auth forms):\n${credParts.join("\n")}\nIMPORTANT: Use these exact credentials when the task requires filling login forms, authentication fields, or any credential inputs. Match field names like "username", "email", "password", "login" etc.\n`;
+    }
+  }
+
+  // Build recent actions section (critical for avoiding repetition)
+  let recentActionsSection = "";
+  if (input.recent_actions && input.recent_actions.length > 0) {
+    recentActionsSection = `\n---\n\nRECENT ACTIONS ALREADY PERFORMED (do NOT repeat the same action):\n`;
+    for (let i = 0; i < input.recent_actions.length; i++) {
+      const a = input.recent_actions[i];
+      const parts = [`${i + 1}. ${a.action_type}`];
+      if (a.selector) parts.push(`on "${a.selector}"`);
+      if (a.value) parts.push(`with value "${a.value}"`);
+      parts.push(`→ ${a.status}`);
+      if (a.error_message) parts.push(`(${a.error_message})`);
+      recentActionsSection += parts.join(" ") + "\n";
+    }
+    recentActionsSection += "\nIMPORTANT: Review the list above. Choose the NEXT logical step, not a repeat of what was already done.\n";
+  }
+
   // Build the full prompt with browser-specific actions
   const userMessage = `
 ${promptTemplate}
@@ -83,15 +121,18 @@ ${promptTemplate}
 
 AVAILABLE BROWSER ACTIONS:
 ${buildAvailableActionsDescription()}
-
+${visualSection}${credentialsSection}${recentActionsSection}
 ---
 
 INPUT:
-${JSON.stringify(input, null, 2)}
+${JSON.stringify({ ...input, visual_context: undefined, credentials: undefined, recent_actions: undefined }, null, 2)}
 
 ---
 
 Choose ONE action from the available browser actions above.
+${input.visual_context ? "Use the CURRENT PAGE description above to inform your decision — it describes what is currently visible in the browser." : ""}
+${input.credentials ? "Test credentials are provided above — use them when filling login or authentication forms." : ""}
+${input.recent_actions && input.recent_actions.length > 0 ? "CRITICAL: Review RECENT ACTIONS above. Do NOT repeat the same action on the same element. Choose the NEXT step in the sequence." : ""}
 Respond with valid JSON only. No markdown, no explanation.
 Output format:
 {
@@ -129,10 +170,10 @@ async function callGemini(
     throw new Error("Gemini API key not set (GEMINI_API_KEY or GOOGLE_API_KEY)");
   }
 
-  const model = config.model || process.env.GEMINI_MODEL || "gemini-2.0-flash";
+  const model = config.model || process.env.GEMINI_MODEL || "gemini-3-flash-preview";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -145,7 +186,7 @@ async function callGemini(
       ],
       generationConfig: {
         temperature: 0.3,
-        maxOutputTokens: 1024,
+        maxOutputTokens: 4096,
       },
     }),
   });
@@ -181,7 +222,7 @@ async function callOpenAI(
 
   const model = config.model || "gpt-4o-mini";
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetchWithRetry("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -200,7 +241,7 @@ async function callOpenAI(
         },
       ],
       temperature: 0.3,
-      max_tokens: 1024,
+      max_tokens: 4096,
     }),
   });
 
@@ -225,26 +266,12 @@ async function callOpenAI(
  * Parse and validate LLM response
  */
 function parseDecisionResponse(response: string): DecisionOutput {
-  // Extract JSON from response (handle markdown code blocks)
-  let jsonStr = response.trim();
-
-  // Remove markdown code block if present
-  if (jsonStr.startsWith("```json")) {
-    jsonStr = jsonStr.slice(7);
-  } else if (jsonStr.startsWith("```")) {
-    jsonStr = jsonStr.slice(3);
-  }
-  if (jsonStr.endsWith("```")) {
-    jsonStr = jsonStr.slice(0, -3);
-  }
-  jsonStr = jsonStr.trim();
-
-  // Parse JSON
+  // Use robust JSON extractor that handles thinking text, truncation, etc.
   let parsed: unknown;
   try {
-    parsed = JSON.parse(jsonStr);
+    parsed = extractJSON(response);
   } catch (error) {
-    console.error("[DecisionLLM] Failed to parse response:", jsonStr);
+    console.error("[DecisionLLM] Failed to parse response:", response.substring(0, 500));
     throw new Error(`Invalid JSON in LLM response: ${error}`);
   }
 
@@ -302,18 +329,33 @@ export async function callMockDecisionLLM(
   // Simple decision logic based on task and state
   const task = input.task.toLowerCase();
   const hasRecentFailure = input.recent_outcomes.some((o) => o.status === "failure");
-  const hasNavigated = input.recent_outcomes.some(
+  
+  // Use recent_actions for smarter tracking (avoids the stuck loop bug)
+  const recentActions = input.recent_actions || [];
+  const hasNavigated = recentActions.some(
+    (a) => a.action_type === "navigate_to_url" && a.status === "success"
+  ) || input.recent_outcomes.some(
     (o) => o.action_type === "navigate_to_url" && o.status === "success"
   );
+  const hasFilledUsername = recentActions.some(
+    (a) => a.action_type === "fill_input" && a.selector?.includes("user") && a.status === "success"
+  );
+  const hasFilledPassword = recentActions.some(
+    (a) => a.action_type === "fill_input" && a.selector?.includes("password") && a.status === "success"
+  );
+  const hasSubmitted = recentActions.some(
+    (a) => (a.action_type === "submit_form" || a.action_type === "click_element") && a.status === "success"
+  );
+  const hasCapturedScreenshot = recentActions.some(
+    (a) => a.action_type === "capture_screenshot" && a.status === "success"
+  );
 
-  // Check if this is a variation rollout (task contains "different approach" or similar)
+  // Check if this is a variation rollout
   const isVariationRollout = task.includes("different approach") || 
     task.includes("alternative strategy") ||
     task.includes("variation");
 
-  // If variation rollout, try a different action
   if (isVariationRollout) {
-    // For variation rollouts, prefer screenshot first
     if (task.includes("screenshot") || task.includes("capture") || task.includes("evidence")) {
       return {
         action_type: "capture_screenshot",
@@ -322,8 +364,6 @@ export async function callMockDecisionLLM(
         expected_outcome: "Screenshot captured for analysis before navigation",
       };
     }
-    
-    // Or check element visibility
     if (task.includes("verify") || task.includes("check")) {
       return {
         action_type: "check_element_visible",
@@ -336,10 +376,8 @@ export async function callMockDecisionLLM(
 
   // If task mentions a URL and we haven't navigated yet
   if ((task.includes("http") || task.includes("url") || task.includes("website")) && !hasNavigated) {
-    // Extract URL from task
     const urlMatch = task.match(/https?:\/\/[^\s]+/);
     const url = urlMatch ? urlMatch[0] : "https://example.com";
-
     return {
       action_type: "navigate_to_url",
       rationale: "Need to navigate to the target URL first",
@@ -348,14 +386,44 @@ export async function callMockDecisionLLM(
     };
   }
 
-  // If we've navigated, capture a screenshot
-  if (hasNavigated && !input.recent_outcomes.some((o) => o.action_type === "capture_screenshot")) {
+  // If we've navigated but haven't captured a screenshot yet, do that
+  if (hasNavigated && !hasCapturedScreenshot && recentActions.length < 2) {
     return {
       action_type: "capture_screenshot",
       rationale: "Capture the current page state for analysis",
       inputs: { fullPage: true },
       expected_outcome: "Screenshot captured showing page content",
     };
+  }
+
+  // If credentials are available and task involves login/auth, complete the full login sequence
+  if (input.credentials && (task.includes("login") || task.includes("auth") || task.includes("credential") || task.includes("fill"))) {
+    if (!hasFilledUsername && input.credentials.username) {
+      return {
+        action_type: "fill_input",
+        rationale: "Filling username field with provided test credentials",
+        inputs: { selector: "#user-name, input[name='username'], input[type='email'], input[name='email'], #username", value: input.credentials.username, clearFirst: true },
+        expected_outcome: "Username field filled with test credentials",
+      };
+    }
+
+    if (hasFilledUsername && !hasFilledPassword && input.credentials.password) {
+      return {
+        action_type: "fill_input",
+        rationale: "Filling password field with provided test credentials (username already entered)",
+        inputs: { selector: "#password, input[type='password'], input[name='password']", value: input.credentials.password, clearFirst: true },
+        expected_outcome: "Password field filled with test credentials",
+      };
+    }
+
+    if (hasFilledUsername && hasFilledPassword && !hasSubmitted) {
+      return {
+        action_type: "click_element",
+        rationale: "Clicking login button after filling both username and password",
+        inputs: { selector: "#login-button, button[type='submit'], input[type='submit']" },
+        expected_outcome: "Login form submitted, user authenticated",
+      };
+    }
   }
 
   // If there was a recent failure, wait and retry

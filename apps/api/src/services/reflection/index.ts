@@ -10,6 +10,9 @@ export {
   generateQAReport,
   type RunReflection,
   type QAReport,
+  type QATestStep,
+  type QAPlan,
+  type QAPlanStep,
 } from "./reflection_engine.js";
 
 export {

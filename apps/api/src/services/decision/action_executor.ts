@@ -15,7 +15,11 @@ import type {
   BrowserActionOutcome,
   ActionArtifacts,
 } from "./action_types.js";
-import { getOrCreateSession, type BrowserSessionConfig } from "./browser_session.js";
+import {
+  getOrCreateSession,
+  type BrowserSessionConfig,
+  type PageDOMSnapshot,
+} from "./browser_session.js";
 import { runAction } from "./playwright_runner.js";
 import { getActionOutcomeRepository } from "../../storage/index.js";
 
@@ -25,8 +29,8 @@ export interface ActionExecutorConfig {
 
 export class ActionExecutor {
   private readonly config: ActionExecutorConfig;
-  private consoleLogs: string[] = [];
-  private networkErrors: string[] = [];
+  /** Latest DOM snapshot after the most recent action */
+  private latestDOMSnapshot: PageDOMSnapshot | null = null;
 
   constructor(config: ActionExecutorConfig = {}) {
     this.config = config;
@@ -44,18 +48,29 @@ export class ActionExecutor {
     console.log(`[ActionExecutor] Executing action: ${action.type}`);
     console.log(`[ActionExecutor] Rationale: ${action.rationale}`);
 
-    // Reset log collectors
-    this.consoleLogs = [];
-    this.networkErrors = [];
-
     // Get or create browser session
     const session = await getOrCreateSession(runId, this.config.browser);
 
     // Execute the action
     const result = await runAction(session, action.type, action.inputs);
 
-    // Capture artifacts
+    // Capture artifacts — pull real logs/errors from the browser session
     const artifacts = await this.captureArtifacts(session, action, result);
+
+    // Extract DOM snapshot after action for NOEMA's understanding
+    if (action.type !== "no_op") {
+      try {
+        this.latestDOMSnapshot = await session.extractPageDOM();
+        console.log(
+          `[ActionExecutor] DOM snapshot: ${this.latestDOMSnapshot.title} ` +
+          `(${this.latestDOMSnapshot.interactiveElements.length} interactive, ` +
+          `${this.latestDOMSnapshot.forms.length} forms, ` +
+          `${this.latestDOMSnapshot.errorMessages.length} errors)`
+        );
+      } catch (error) {
+        console.warn("[ActionExecutor] Failed to extract DOM:", error);
+      }
+    }
 
     // Build outcome
     const outcome: BrowserActionOutcome = {
@@ -72,24 +87,36 @@ export class ActionExecutor {
 
     console.log(
       `[ActionExecutor] Action ${outcome.status}: ${action.type} ` +
-      `(${outcome.duration_ms}ms)`
+      `(${outcome.duration_ms}ms, ${artifacts.logs.length} logs, ${artifacts.network_errors.length} network errors)`
     );
 
     return outcome;
   }
 
   /**
-   * Capture artifacts after action execution
+   * Get the latest DOM snapshot (extracted after the last action)
+   */
+  getLatestDOMSnapshot(): PageDOMSnapshot | null {
+    return this.latestDOMSnapshot;
+  }
+
+  /**
+   * Capture artifacts after action execution.
+   * Pulls real console logs and network errors from the browser session.
    */
   private async captureArtifacts(
     session: ReturnType<typeof getOrCreateSession> extends Promise<infer T> ? T : never,
     action: BrowserAction,
     result: { success: boolean; error?: string; data?: Record<string, unknown> }
   ): Promise<ActionArtifacts> {
+    // Get real console logs and network errors from the browser session (and clear them)
+    const browserLogs = session.getConsoleLogs(true);
+    const browserNetErrors = session.getNetworkErrors(true);
+
     const artifacts: ActionArtifacts = {
       screenshots: [],
-      logs: [...this.consoleLogs],
-      network_errors: [...this.networkErrors],
+      logs: [...browserLogs],
+      network_errors: [...browserNetErrors],
     };
 
     // Always capture a screenshot after action (except no_op)
@@ -104,7 +131,6 @@ export class ActionExecutor {
 
     // If action was capture_screenshot, the screenshot is already in result.data
     if (action.type === "capture_screenshot" && result.data?.filepath) {
-      // Already captured in the action itself
       if (!artifacts.screenshots.includes(result.data.filepath as string)) {
         artifacts.screenshots.push(result.data.filepath as string);
       }
@@ -112,12 +138,12 @@ export class ActionExecutor {
 
     // Add error to logs if action failed
     if (!result.success && result.error) {
-      artifacts.logs.push(`[ERROR] ${result.error}`);
+      artifacts.logs.push(`[ACTION_ERROR] ${result.error}`);
     }
 
     // Add result data to logs
     if (result.data) {
-      artifacts.logs.push(`[RESULT] ${JSON.stringify(result.data)}`);
+      artifacts.logs.push(`[ACTION_RESULT] ${JSON.stringify(result.data)}`);
     }
 
     return artifacts;
@@ -142,19 +168,6 @@ export class ActionExecutor {
     });
   }
 
-  /**
-   * Add a console log (called by session event handlers)
-   */
-  addConsoleLog(log: string): void {
-    this.consoleLogs.push(log);
-  }
-
-  /**
-   * Add a network error (called by session event handlers)
-   */
-  addNetworkError(error: string): void {
-    this.networkErrors.push(error);
-  }
 }
 
 // =============================================================================

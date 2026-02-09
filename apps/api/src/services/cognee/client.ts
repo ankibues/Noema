@@ -39,7 +39,7 @@ export class CogneeHttpClient implements CogneeClient {
   constructor(config: CogneeClientConfig) {
     // Remove trailing slash if present
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
-    this.timeoutMs = config.timeoutMs ?? 30000;
+    this.timeoutMs = config.timeoutMs ?? 5000; // Fast fail — Cognee is non-critical
   }
 
   /**

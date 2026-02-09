@@ -12,6 +12,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fetchWithRetry, extractJSON } from "../llm_utils.js";
 import type {
   ModelUpdatePromptInput,
   ModelUpdatePromptOutput,
@@ -27,7 +28,7 @@ export interface LLMClientConfig {
 
 const DEFAULT_CONFIG: LLMClientConfig = {
   provider: "gemini",
-  model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+  model: process.env.GEMINI_MODEL || "gemini-3-flash-preview",
 };
 
 /**
@@ -100,10 +101,10 @@ async function callGemini(
     throw new Error("Gemini API key not set (GEMINI_API_KEY or GOOGLE_API_KEY)");
   }
 
-  const model = config.model || process.env.GEMINI_MODEL || "gemini-2.0-flash";
+  const model = config.model || process.env.GEMINI_MODEL || "gemini-3-flash-preview";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -152,7 +153,7 @@ async function callOpenAI(
 
   const model = config.model || "gpt-4o-mini";
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetchWithRetry("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -196,26 +197,12 @@ async function callOpenAI(
  * Parse and validate LLM response
  */
 function parseModelUpdateResponse(response: string): ModelUpdatePromptOutput {
-  // Extract JSON from response (handle markdown code blocks)
-  let jsonStr = response.trim();
-  
-  // Remove markdown code block if present
-  if (jsonStr.startsWith("```json")) {
-    jsonStr = jsonStr.slice(7);
-  } else if (jsonStr.startsWith("```")) {
-    jsonStr = jsonStr.slice(3);
-  }
-  if (jsonStr.endsWith("```")) {
-    jsonStr = jsonStr.slice(0, -3);
-  }
-  jsonStr = jsonStr.trim();
-
-  // Parse JSON
+  // Use robust JSON extractor
   let parsed: unknown;
   try {
-    parsed = JSON.parse(jsonStr);
+    parsed = extractJSON(response);
   } catch (error) {
-    console.error("[LLMClient] Failed to parse response:", jsonStr);
+    console.error("[LLMClient] Failed to parse response:", response.substring(0, 500));
     throw new Error(`Invalid JSON in LLM response: ${error}`);
   }
 

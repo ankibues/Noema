@@ -53,3 +53,4 @@ docs/BUILD_PLAN.md
 docs/DEMO_PLAN.md
 docs/API_spec.md
 docs/COMPONENTS.md
+.env.example

@@ -33,8 +33,11 @@ export {
   BrowserSession,
   getOrCreateSession,
   closeSession,
+  closeSessionAndGetVideo,
   closeAllSessions,
 } from "./browser_session.js";
+
+export type { PageDOMSnapshot } from "./browser_session.js";
 
 // Playwright runner
 export { runAction } from "./playwright_runner.js";
@@ -60,10 +63,24 @@ export type {
   NoOpInput,
 } from "./action_types.js";
 
+// Plan generator
+export { generateTestPlan } from "./plan_generator.js";
+
+// Plan cache (persistent memory → reduced LLM usage)
+export {
+  findCachedPlan,
+  savePlanToCache,
+  recordPlanReuse,
+  getAllCachedPlans,
+} from "./plan_cache.js";
+
 export type {
   DecisionEngineConfig,
   DecisionContext,
   DecisionResult,
   ExecutionResult,
   DecisionPromptInput,
+  TestCredentials,
+  TestPlan,
+  TestPlanStep,
 } from "./types.js";

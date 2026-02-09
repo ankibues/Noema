@@ -3,6 +3,7 @@ import type { NarrationEvent } from "../api/noemaClient";
 interface Props {
   screenshots: string[];
   events: NarrationEvent[];
+  hideHeader?: boolean;
 }
 
 const styles = {
@@ -26,7 +27,7 @@ const styles = {
     padding: 12,
     display: "flex",
     flexDirection: "column" as const,
-    gap: 8,
+    gap: 6,
   },
   actionCard: (success: boolean) => ({
     padding: "8px 12px",
@@ -55,6 +56,16 @@ const styles = {
     color: success ? "#86efac" : "#fca5a5",
     marginLeft: 8,
   }),
+  planStepDivider: {
+    padding: "4px 10px",
+    fontSize: 10,
+    fontWeight: 600,
+    color: "#818cf8",
+    borderLeft: "2px solid #818cf8",
+    marginTop: 4,
+    marginBottom: 2,
+    letterSpacing: 0.5,
+  },
   empty: {
     flex: 1,
     display: "flex",
@@ -63,67 +74,97 @@ const styles = {
     color: "#4b5563",
     fontSize: 12,
   },
-  screenshotGrid: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    gap: 8,
-    marginTop: 8,
-  },
-  screenshotTag: {
-    fontSize: 10,
-    padding: "4px 8px",
-    backgroundColor: "#1e1e2e",
-    borderRadius: 3,
-    color: "#fbbf24",
-    border: "1px solid #2e2e3e",
-  },
 };
 
-export default function BrowserFeed({ screenshots, events }: Props) {
-  // Extract action events
-  const actionEvents = events.filter(
-    (e) => e.type === "action_started" || e.type === "action_completed"
+export default function BrowserFeed({ events, hideHeader }: Props) {
+  // Extract action events AND plan step events for context
+  const relevantEvents = events.filter(
+    (e) =>
+      e.type === "action_started" ||
+      e.type === "action_completed" ||
+      e.type === "plan_step_started" ||
+      e.type === "plan_step_completed"
   );
 
-  // Pair start/complete events
-  const actionPairs: { started: NarrationEvent; completed?: NarrationEvent }[] = [];
-  for (const event of actionEvents) {
-    if (event.type === "action_started") {
-      actionPairs.push({ started: event });
-    } else if (event.type === "action_completed" && actionPairs.length > 0) {
-      const last = actionPairs[actionPairs.length - 1];
-      if (!last.completed) {
-        last.completed = event;
+  // Build a timeline of actions grouped by plan step
+  type TimelineItem =
+    | { kind: "step_start"; title: string; stepId: number }
+    | { kind: "action"; started: NarrationEvent; completed?: NarrationEvent }
+    | { kind: "step_end"; stepId: number; result: string };
+
+  const timeline: TimelineItem[] = [];
+  let pendingAction: NarrationEvent | null = null;
+
+  for (const event of relevantEvents) {
+    if (event.type === "plan_step_started") {
+      timeline.push({
+        kind: "step_start",
+        title: (event.data?.title as string) || `Step ${event.data?.step_id}`,
+        stepId: event.data?.step_id as number,
+      });
+    } else if (event.type === "plan_step_completed") {
+      timeline.push({
+        kind: "step_end",
+        stepId: event.data?.step_id as number,
+        result: (event.data?.result as string) || "done",
+      });
+    } else if (event.type === "action_started") {
+      if (pendingAction) {
+        timeline.push({ kind: "action", started: pendingAction });
+      }
+      pendingAction = event;
+    } else if (event.type === "action_completed") {
+      if (pendingAction) {
+        timeline.push({ kind: "action", started: pendingAction, completed: event });
+        pendingAction = null;
       }
     }
+  }
+  if (pendingAction) {
+    timeline.push({ kind: "action", started: pendingAction });
   }
 
   return (
     <div style={styles.container}>
-      <div style={styles.header}>
-        BROWSER ACTIVITY
-        {screenshots.length > 0 && (
-          <span style={{ color: "#fbbf24", marginLeft: 8, fontWeight: 400 }}>
-            {screenshots.length} screenshot(s)
-          </span>
-        )}
-      </div>
+      {!hideHeader && (
+        <div style={styles.header}>BROWSER ACTIVITY</div>
+      )}
       <div style={styles.body}>
-        {actionPairs.length === 0 && (
+        {timeline.length === 0 && (
           <div style={styles.empty}>
             Browser activity will appear here when actions are executed.
           </div>
         )}
-        {actionPairs.map((pair, i) => {
-          const success = pair.completed?.message.includes("uccess") ?? false;
-          const duration = pair.completed?.data?.duration_ms as number | undefined;
-          const actionType = pair.started.data?.action_type as string || "action";
+        {timeline.map((item, i) => {
+          if (item.kind === "step_start") {
+            return (
+              <div key={i} style={styles.planStepDivider}>
+                ▸ Step {item.stepId}: {item.title}
+              </div>
+            );
+          }
+          if (item.kind === "step_end") {
+            return (
+              <div key={i} style={{
+                ...styles.planStepDivider,
+                color: item.result === "pass" ? "#22c55e" : item.result === "fail" ? "#ef4444" : "#6b7280",
+                borderLeftColor: item.result === "pass" ? "#22c55e" : item.result === "fail" ? "#ef4444" : "#6b7280",
+                fontSize: 9,
+              }}>
+                {item.result === "pass" ? "✓" : item.result === "fail" ? "✗" : "—"} Step {item.stepId} {item.result}
+              </div>
+            );
+          }
+          // action
+          const success = item.completed?.message.includes("uccess") ?? false;
+          const duration = item.completed?.data?.duration_ms as number | undefined;
+          const actionType = (item.started.data?.action_type as string) || "action";
 
           return (
             <div key={i} style={styles.actionCard(success)}>
               <div style={styles.actionType}>
                 {actionType.replace(/_/g, " ").toUpperCase()}
-                {pair.completed && (
+                {item.completed && (
                   <span style={styles.statusBadge(success)}>
                     {success ? "OK" : "FAIL"}
                   </span>
@@ -134,23 +175,13 @@ export default function BrowserFeed({ screenshots, events }: Props) {
                   </span>
                 )}
               </div>
-              <div style={styles.actionDetail}>{pair.started.message}</div>
-              {pair.completed && (
-                <div style={styles.actionDetail}>{pair.completed.message}</div>
+              <div style={styles.actionDetail}>{item.started.message}</div>
+              {item.completed && (
+                <div style={styles.actionDetail}>{item.completed.message}</div>
               )}
             </div>
           );
         })}
-
-        {screenshots.length > 0 && (
-          <div style={styles.screenshotGrid}>
-            {screenshots.map((s, i) => (
-              <span key={i} style={styles.screenshotTag}>
-                {s.split("/").pop()}
-              </span>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );

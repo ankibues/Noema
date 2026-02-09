@@ -83,7 +83,7 @@ async function demo() {
     mockLLM: MOCK_MODE,     // Use mock LLM if in mock mode
     llm: {
       provider: "gemini",
-      model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+      model: process.env.GEMINI_MODEL || "gemini-3-flash-preview",
     },
   });
   engine.start();

@@ -9,10 +9,44 @@
 
 import type { BrowserAction, BrowserActionOutcome } from "../decision/action_types.js";
 import type { MentalModel, Experience, Observation } from "../../schemas/index.js";
+import type { TestPlan, TestPlanStep } from "../decision/types.js";
 
 // =============================================================================
 // Action Narrations
 // =============================================================================
+
+/**
+ * Get the set of credential values from env (for masking in narration).
+ * Cached on first call.
+ */
+let _credentialValues: Set<string> | null = null;
+function getCredentialValues(): Set<string> {
+  if (_credentialValues === null) {
+    _credentialValues = new Set<string>();
+    if (process.env.TEST_USERNAME) _credentialValues.add(process.env.TEST_USERNAME);
+    if (process.env.TEST_PASSWORD) _credentialValues.add(process.env.TEST_PASSWORD);
+    if (process.env.TEST_CREDENTIALS_JSON) {
+      try {
+        const extras = JSON.parse(process.env.TEST_CREDENTIALS_JSON);
+        for (const val of Object.values(extras)) {
+          if (typeof val === "string" && val.length > 0) _credentialValues.add(val);
+        }
+      } catch { /* ignore */ }
+    }
+  }
+  return _credentialValues;
+}
+
+/**
+ * Mask a value if it matches any known credential.
+ * Returns "••••••" if the value is a credential, otherwise returns the value unchanged.
+ */
+function maskIfCredential(value: string | undefined): string {
+  if (!value) return "(empty)";
+  const creds = getCredentialValues();
+  if (creds.has(value)) return "••••••";
+  return value;
+}
 
 export function narrateActionStarted(action: BrowserAction): string {
   switch (action.type) {
@@ -20,8 +54,11 @@ export function narrateActionStarted(action: BrowserAction): string {
       return `I'm navigating to ${(action.inputs as any).url} to observe the page.`;
     case "click_element":
       return `I'm clicking on element '${(action.inputs as any).selector}'.`;
-    case "fill_input":
-      return `I'm filling the input '${(action.inputs as any).selector}' with a value.`;
+    case "fill_input": {
+      const selector = (action.inputs as any).selector || "input";
+      const value = maskIfCredential((action.inputs as any).value);
+      return `I'm filling the input '${selector}' with value "${value}".`;
+    }
     case "submit_form":
       return `I'm submitting a form to trigger a response.`;
     case "check_element_visible":
@@ -124,6 +161,35 @@ export function narrateRunCompleted(
     return `Task completed after ${actionsCount} action${actionsCount === 1 ? "" : "s"}.`;
   }
   return `Task ended after ${actionsCount} action${actionsCount === 1 ? "" : "s"}. Some actions did not succeed.`;
+}
+
+// =============================================================================
+// Plan Narrations
+// =============================================================================
+
+export function narratePlanGenerated(plan: TestPlan): string {
+  return `I've analyzed the task and created a test plan: "${plan.plan_title}" with ${plan.total_steps} steps. ${plan.plan_rationale}`;
+}
+
+export function narratePlanStepStarting(step: TestPlanStep, totalSteps: number): string {
+  const substeps = step.test_steps && step.test_steps.length > 0
+    ? ` [${step.test_steps.length} test steps: ${step.test_steps.slice(0, 2).join(", ")}${step.test_steps.length > 2 ? "..." : ""}]`
+    : "";
+  return `Test case ${step.step_id}/${totalSteps}: "${step.title}" — ${step.description.substring(0, 100)}${substeps}`;
+}
+
+export function narratePlanStepCompleted(step: TestPlanStep, passed: boolean): string {
+  if (passed) {
+    return `Step ${step.step_id} "${step.title}" passed. ${step.actual_outcome || step.expected_outcome}`;
+  }
+  return `Step ${step.step_id} "${step.title}" failed. ${step.actual_outcome || "Did not meet expected outcome."}`;
+}
+
+export function narratePlanSummary(plan: TestPlan): string {
+  const passed = plan.steps.filter((s) => s.result === "pass").length;
+  const failed = plan.steps.filter((s) => s.result === "fail").length;
+  const skipped = plan.steps.filter((s) => s.result === "skipped").length;
+  return `Plan execution complete: ${passed} passed, ${failed} failed${skipped > 0 ? `, ${skipped} skipped` : ""} out of ${plan.total_steps} planned steps.`;
 }
 
 // =============================================================================

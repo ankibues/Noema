@@ -1,24 +1,25 @@
 /**
  * ScreenshotAdapter - Converts screenshots into processable chunks
  * 
- * Purpose: Accept image files/base64 and extract text via OCR.
+ * Purpose: Accept image files/base64 and extract visual understanding via Gemini Vision.
  * 
- * MVP Implementation:
- * - OCR is stubbed (returns placeholder text)
+ * Implementation:
+ * - Uses Gemini Vision (gemini-3-pro-image-preview) for real visual analysis
+ * - Falls back to stub text if no API key is available
  * - Raw image is stored as evidence
- * - Future: integrate real OCR (Tesseract, cloud API, etc.)
  * 
  * This adapter does NOT:
- * - Interpret image meaning
+ * - Interpret image meaning beyond what Vision returns
  * - Make decisions
  * - Create Observations directly (that's Normalizer's job)
  */
 
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, copyFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { v4 as uuid } from "uuid";
 import { chunkText, type Chunk, type ChunkerOptions } from "../processors/chunker.js";
+import { analyzeScreenshot, isVisionAvailable } from "../vision_client.js";
 
 export interface ScreenshotAdapterInput {
   /** Base64 encoded image data */
@@ -32,14 +33,14 @@ export interface ScreenshotAdapterInput {
 }
 
 export interface ScreenshotAdapterOutput {
-  /** Resulting chunks from OCR text */
+  /** Resulting chunks from vision analysis text */
   chunks: Chunk[];
   /** Path to stored raw image evidence */
   evidencePath: string;
-  /** OCR extracted text (full) */
+  /** Vision-extracted text (full) */
   extractedText: string;
-  /** Whether real OCR was used (false for stub) */
-  ocrUsed: boolean;
+  /** Whether real vision was used (false for stub) */
+  visionUsed: boolean;
 }
 
 /**
@@ -75,12 +76,23 @@ export async function processScreenshot(
     const imageBuffer = Buffer.from(cleanBase64, "base64");
     await writeFile(evidencePath, imageBuffer);
   } else if (filePath) {
-    // For file path, we could copy the file, but for MVP just reference it
-    // In production, you'd copy to ensure evidence preservation
+    // Copy the file to the evidence directory for preservation
+    try {
+      await copyFile(filePath, evidencePath);
+    } catch (error) {
+      console.warn(`[ScreenshotAdapter] Failed to copy evidence file: ${error}`);
+    }
   }
 
-  // OCR extraction (STUB for MVP)
-  const extractedText = await extractTextFromImage(base64, filePath);
+  // Vision analysis via Gemini
+  const visionResult = await analyzeScreenshot({ base64, filePath });
+  const extractedText = visionResult.description;
+
+  if (visionResult.visionUsed) {
+    console.log(`[ScreenshotAdapter] Gemini Vision analysis complete (${visionResult.model})`);
+  } else {
+    console.log("[ScreenshotAdapter] Using stub analysis (no API key)");
+  }
 
   // Chunk the extracted text
   const chunks = chunkText(extractedText, options);
@@ -89,45 +101,8 @@ export async function processScreenshot(
     chunks,
     evidencePath,
     extractedText,
-    ocrUsed: false, // Stub - set to true when real OCR is implemented
+    visionUsed: visionResult.visionUsed,
   };
-}
-
-/**
- * Extract text from image using OCR
- * 
- * MVP: Returns stub text describing what would be extracted
- * Future: Integrate Tesseract.js, Google Vision, or similar
- */
-async function extractTextFromImage(
-  base64?: string,
-  filePath?: string
-): Promise<string> {
-  // MVP STUB: Return placeholder text
-  // In production, this would call actual OCR
-  
-  const source = base64 ? "base64 image" : `file: ${filePath}`;
-  const timestamp = new Date().toISOString();
-  
-  // Simulate OCR output structure
-  return `[Screenshot OCR - ${timestamp}]
-Source: ${source}
-Status: OCR stub - real extraction not implemented
-
-[Detected UI Elements]
-- Header region detected
-- Main content area detected
-- Footer region detected
-
-[Placeholder Text]
-This is placeholder text from the OCR stub.
-In production, this would contain actual extracted text from the screenshot.
-The screenshot has been stored as evidence for future processing.
-
-[Notes]
-- Implement real OCR using Tesseract.js or cloud API
-- Consider UI element detection for structured extraction
-- Store bounding boxes for element locations`;
 }
 
 /**
@@ -158,5 +133,12 @@ export class ScreenshotAdapter {
    */
   get type(): string {
     return "screenshot_adapter";
+  }
+
+  /**
+   * Check if Gemini Vision is available
+   */
+  static isVisionAvailable(): boolean {
+    return isVisionAvailable();
   }
 }

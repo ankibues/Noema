@@ -37,6 +37,14 @@ export interface RunMetrics {
   failure_count: number;
   timestamp: string;
   duration_ms: number;
+  /** LLM calls actually made during this run */
+  llm_calls_made?: number;
+  /** LLM calls saved by using cached plans or action sequences */
+  llm_calls_saved?: number;
+  /** Whether the test plan was reused from cache */
+  plan_reused?: boolean;
+  /** Number of plan steps executed from cached action sequences (no LLM) */
+  steps_from_memory?: number;
 }
 
 export interface ImprovementSignal {
@@ -212,6 +220,41 @@ export async function analyzeImprovement(
       current_value: 1.0,
       direction: "improved",
       description: `Success rate improved from ${(prevSuccessRate * 100).toFixed(0)}% to 100%`,
+    });
+  }
+
+  // LLM calls saved (higher is better — leveraging persistent memory)
+  if (currentMetrics.llm_calls_saved && currentMetrics.llm_calls_saved > 0) {
+    const totalCalls = (currentMetrics.llm_calls_made || 0) + currentMetrics.llm_calls_saved;
+    const prevSaved = average(previousRuns.map((r) => r.llm_calls_saved || 0));
+    signals.push({
+      metric: "llm_calls_saved",
+      previous_value: prevSaved,
+      current_value: currentMetrics.llm_calls_saved,
+      direction: currentMetrics.llm_calls_saved > prevSaved ? "improved" : "same",
+      description: `${currentMetrics.llm_calls_saved} LLM calls saved via persistent memory (${totalCalls > 0 ? ((currentMetrics.llm_calls_saved / totalCalls) * 100).toFixed(0) : 0}% of total)`,
+    });
+  }
+
+  // Plan reuse signal
+  if (currentMetrics.plan_reused) {
+    signals.push({
+      metric: "plan_reused",
+      previous_value: 0,
+      current_value: 1,
+      direction: "improved",
+      description: "Test plan was reused from persistent memory — no LLM call needed for planning",
+    });
+  }
+
+  // Steps from memory (higher is better)
+  if (currentMetrics.steps_from_memory && currentMetrics.steps_from_memory > 0) {
+    signals.push({
+      metric: "steps_from_memory",
+      previous_value: average(previousRuns.map((r) => r.steps_from_memory || 0)),
+      current_value: currentMetrics.steps_from_memory,
+      direction: "improved",
+      description: `${currentMetrics.steps_from_memory} plan step(s) executed from cached memory (no LLM)`,
     });
   }
 

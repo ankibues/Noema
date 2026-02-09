@@ -19,16 +19,19 @@
 // =============================================================================
 
 export type NarrationEventType =
-  | "system"           // System lifecycle events
-  | "narration"        // NOEMA self-narration
-  | "action_started"   // An action is about to execute
-  | "action_completed" // An action finished
-  | "evidence_captured" // Evidence was captured
-  | "belief_formed"    // A belief was formed or updated
+  | "system"             // System lifecycle events
+  | "narration"          // NOEMA self-narration
+  | "action_started"     // An action is about to execute
+  | "action_completed"   // An action finished
+  | "evidence_captured"  // Evidence was captured
+  | "belief_formed"      // A belief was formed or updated
   | "experience_learned" // An experience was learned
-  | "run_started"      // A run began
-  | "run_completed"    // A run finished
-  | "error";           // An error occurred
+  | "plan_generated"     // A test plan was generated
+  | "plan_step_started"  // A plan step is starting
+  | "plan_step_completed" // A plan step finished
+  | "run_started"        // A run began
+  | "run_completed"      // A run finished
+  | "error";             // An error occurred
 
 export interface NarrationEvent {
   /** Auto-generated event ID */

@@ -86,7 +86,7 @@ async function demo() {
     },
     llm: {
       provider: "gemini",
-      model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+      model: process.env.GEMINI_MODEL || "gemini-3-flash-preview",
     },
   });
   console.log("   ✓ Decision Engine created\n");

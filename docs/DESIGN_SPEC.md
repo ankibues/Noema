@@ -12,7 +12,7 @@ NOEMA is a **persistent digital cognitive system** that senses multimodal data, 
 - Persistent semantic memory (Cognee)
 - Mental models ("thought documents") that update with confidence + evidence
 - Action selection based on models + experiences
-- Training-free learning loop (multi-rollout -> compare -> distill experiences)
+- Training-free GRPO learning loop (multi-rollout -> compare -> distill experiences)
 - Transparent / inspectable internal state for demo
 
 ### 1.2 Non-goals (MVP)
@@ -69,7 +69,7 @@ Solution: segment -> summarize -> store -> retrieve only relevant slices.
 ### 3.3 Minimum viable sensing
 MVP must support:
 - text/log ingest
-- screenshot ingest (high demo value)
+- screenshot ingest with **Gemini Vision analysis** (`gemini-3-pro-image-preview`) — visual understanding of page layout, UI elements, text, errors, CSS selectors
 Optional:
 - audio -> transcript -> Observation
 - video -> frames -> Observation
@@ -106,13 +106,16 @@ The LLM edits these documents; the system enforces schema and confidence rules.
 
 ---
 
-## 6. Experience library (training-free learning)
-The experience library stores short, generalizable lessons extracted by comparing multiple attempts.
-Experiences are injected as **token priors** into future prompts to steer behavior.
+## 6. Experience library (Training-Free GRPO)
+The experience library stores short (≤32 words), generalizable heuristics extracted by comparing multiple rollouts using multi-criteria evaluation (success, evidence clarity, error specificity, ambiguity reduction, signal strength).
+Experiences are injected as **token priors** into future prompts to steer behavior — adapting the GRPO (Group Relative Policy Optimization) approach to work without gradient updates.
 
 ---
 
 ## 7. Cognition and learning loop
+
+### 7.0 Not Chain-of-Thought
+NOEMA's cognitive loop is **architectural**, not a prompting technique. Chain-of-Thought asks an LLM to "think step by step" within a single inference call — those reasoning tokens are ephemeral and unverifiable. NOEMA's loop is a real software pipeline: each stage (Sense, Believe, Decide, Act, Learn, Reflect) reads and writes persistent data objects (Observations, Mental Models, Experiences, Graph Edges). The LLM is called at specific stages as a stateless reasoning tool — but the state, learning, and improvement are all managed by the architecture, not by the LLM's token generation.
 
 ### 7.1 End-to-end loop
 Observe

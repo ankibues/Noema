@@ -1,9 +1,15 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import type { QATaskInput } from "../api/noemaClient";
 
 interface Props {
   onSubmit: (task: QATaskInput) => void;
+  onStop?: () => void;
   disabled: boolean;
+  running?: boolean;
+  /** Pre-fill goal from NOEMA suggestion */
+  prefillGoal?: string | null;
+  /** Called after the prefill has been consumed */
+  onPrefillConsumed?: () => void;
 }
 
 const styles = {
@@ -54,26 +60,52 @@ const styles = {
     color: "#6b7280",
     marginRight: 4,
   },
-  checkbox: {
-    accentColor: "#7c3aed",
-  },
 };
 
-export default function TaskInput({ onSubmit, disabled }: Props) {
+export default function TaskInput({ onSubmit, onStop, disabled, running, prefillGoal, onPrefillConsumed }: Props) {
   const [goal, setGoal] = useState("Test the page structure and content of this website");
   const [url, setUrl] = useState("https://example.com");
-  const [mockLLM, setMockLLM] = useState(true);
+  const [urlError, setUrlError] = useState("");
+
+  // Handle prefill from NOEMA suggestion
+  useEffect(() => {
+    if (prefillGoal) {
+      setGoal(prefillGoal);
+      onPrefillConsumed?.();
+    }
+  }, [prefillGoal, onPrefillConsumed]);
+
+  const validateUrl = (input: string): string | null => {
+    if (!input.trim()) return "URL is required";
+    const httpCount = (input.match(/https?:\/\//g) || []).length;
+    if (httpCount > 1) return "Multiple URLs detected — please enter only one URL";
+    try {
+      const testUrl = input.startsWith("http") ? input : "https://" + input;
+      new URL(testUrl);
+      return null;
+    } catch {
+      return "Invalid URL format";
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (disabled || !goal.trim()) return;
 
+    const error = validateUrl(url);
+    if (error) {
+      setUrlError(error);
+      return;
+    }
+    setUrlError("");
+
     onSubmit({
       goal: goal.trim(),
       url: url.trim(),
-      mock_llm: mockLLM,
-      max_cycles: 3,
-      enable_optimization: true,
+      mock_llm: false,
+      max_cycles_per_step: 5,
+      max_total_actions: 40,
+      enable_optimization: false,
     });
   };
 
@@ -88,26 +120,57 @@ export default function TaskInput({ onSubmit, disabled }: Props) {
         disabled={disabled}
       />
       <span style={styles.label}>URL:</span>
-      <input
-        style={styles.urlInput}
-        value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        placeholder="https://..."
-        disabled={disabled}
-      />
-      <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#6b7280" }}>
+      <div style={{ position: "relative" }}>
         <input
-          type="checkbox"
-          checked={mockLLM}
-          onChange={(e) => setMockLLM(e.target.checked)}
-          style={styles.checkbox}
+          style={{
+            ...styles.urlInput,
+            ...(urlError ? { borderColor: "#ef4444" } : {}),
+          }}
+          value={url}
+          onChange={(e) => { setUrl(e.target.value); setUrlError(""); }}
+          placeholder="https://..."
           disabled={disabled}
         />
-        mock
-      </label>
-      <button type="submit" style={styles.button(disabled)} disabled={disabled}>
-        {disabled ? "RUNNING..." : "RUN"}
-      </button>
+        {urlError && (
+          <div style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            right: 0,
+            fontSize: 10,
+            color: "#ef4444",
+            padding: "2px 4px",
+            whiteSpace: "nowrap",
+          }}>
+            {urlError}
+          </div>
+        )}
+      </div>
+      {running ? (
+        <button
+          type="button"
+          onClick={onStop}
+          style={{
+            padding: "8px 20px",
+            backgroundColor: "#dc2626",
+            color: "#fff",
+            border: "none",
+            borderRadius: 4,
+            fontFamily: "inherit",
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: "pointer",
+            letterSpacing: 1,
+            transition: "background-color 0.2s",
+          }}
+        >
+          ■ STOP
+        </button>
+      ) : (
+        <button type="submit" style={styles.button(disabled)} disabled={disabled}>
+          RUN
+        </button>
+      )}
     </form>
   );
 }

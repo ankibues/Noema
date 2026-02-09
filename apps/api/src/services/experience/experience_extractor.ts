@@ -17,6 +17,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Experience } from "../../schemas/index.js";
 import { getExperienceRepository } from "../../storage/index.js";
+import { fetchWithRetry, extractJSON } from "../llm_utils.js";
 import type {
   Rollout,
   RolloutComparison,
@@ -40,7 +41,7 @@ const DEFAULT_CONFIG: Required<ExperienceExtractorConfig> = {
   mockLLM: false,
   llm: {
     provider: "gemini",
-    model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+    model: process.env.GEMINI_MODEL || "gemini-3-flash-preview",
   },
 };
 
@@ -184,15 +185,15 @@ Respond with valid JSON only. No markdown, no explanation.
       throw new Error("Gemini API key not set");
     }
 
-    const model = this.config.llm.model || process.env.GEMINI_MODEL || "gemini-2.0-flash";
+    const model = this.config.llm.model || process.env.GEMINI_MODEL || "gemini-3-flash-preview";
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: userMessage }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 1024 },
+        generationConfig: { temperature: 0.2, maxOutputTokens: 2048 },
       }),
     });
 
@@ -217,20 +218,8 @@ Respond with valid JSON only. No markdown, no explanation.
    * Parse LLM response
    */
   private parseExtractionResponse(response: string): ExtractionPromptOutput {
-    let jsonStr = response.trim();
-
-    // Remove markdown code blocks
-    if (jsonStr.startsWith("```json")) {
-      jsonStr = jsonStr.slice(7);
-    } else if (jsonStr.startsWith("```")) {
-      jsonStr = jsonStr.slice(3);
-    }
-    if (jsonStr.endsWith("```")) {
-      jsonStr = jsonStr.slice(0, -3);
-    }
-    jsonStr = jsonStr.trim();
-
-    const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+    // Use robust JSON extractor
+    const parsed = extractJSON(response) as Record<string, unknown>;
 
     return {
       add: Array.isArray(parsed.add) ? parsed.add : [],
@@ -265,7 +254,7 @@ Respond with valid JSON only. No markdown, no explanation.
       add: [
         {
           statement,
-          scope: ["browser", "navigation", winner.action.type],
+          scope: this.generateScope(winner),
           confidence: Math.min(0.7, 0.5 + comparison.winMargin),
         },
       ],
@@ -275,27 +264,71 @@ Respond with valid JSON only. No markdown, no explanation.
   }
 
   /**
-   * Generate a mock experience statement
+   * Generate a varied, QA-relevant mock experience statement
    */
   private generateMockStatement(
     winner: Rollout,
-    _loser?: Rollout
+    loser?: Rollout
   ): string {
     const winnerAction = winner.action.type;
     const winnerSuccess = winner.outcome.status === "success";
+    const task = winner.beliefContext?.task?.toLowerCase() || "";
 
-    if (winnerSuccess) {
-      return `When navigating to a URL, ${winnerAction} produces clearer evidence than alternatives.`;
-    } else {
-      // Even failed actions can teach us something
-      const errorType = winner.outcome.error_message?.includes("timeout")
-        ? "timeout"
-        : winner.outcome.error_message?.includes("not found")
-        ? "element not found"
-        : "error";
-
-      return `When encountering ${errorType}, capture a screenshot first to understand the page state.`;
+    // Context-aware statement generation
+    if (winnerAction === "navigate_to_url") {
+      return winnerSuccess
+        ? "Wait for page load to complete before interacting with elements."
+        : "Verify URL format before navigation to avoid load failures.";
     }
+    if (winnerAction === "click_element") {
+      return winnerSuccess
+        ? "Verify element visibility before clicking to avoid stale element errors."
+        : "If click fails, check for overlapping elements or loading spinners.";
+    }
+    if (winnerAction === "fill_input") {
+      return winnerSuccess
+        ? "Clear existing input value before filling to avoid concatenated text."
+        : "Ensure input field is focused and editable before attempting to fill.";
+    }
+    if (winnerAction === "check_element_visible") {
+      return winnerSuccess
+        ? "After form submission, verify success indicator appears within timeout."
+        : "When element not found, check if page has fully loaded first.";
+    }
+    if (winnerAction === "capture_screenshot") {
+      return "Capture screenshot after each critical action for evidence trail.";
+    }
+    if (winnerAction === "wait_for_network_idle") {
+      return "Wait for network idle after navigation to ensure page is fully loaded.";
+    }
+
+    // Fallback: general QA insight
+    if (winnerSuccess) {
+      return `${winnerAction} succeeded — confirm page state before advancing to next step.`;
+    }
+    const errorHint = winner.outcome.error_message
+      ? ` (${winner.outcome.error_message.substring(0, 40)})`
+      : "";
+    return `${winnerAction} failed${errorHint} — retry with alternative selector or wait longer.`;
+  }
+
+  /**
+   * Generate relevant scope tags for the experience
+   */
+  private generateScope(rollout: Rollout): string[] {
+    const scopes: string[] = ["qa"];
+    const action = rollout.action.type;
+    const task = rollout.beliefContext?.task?.toLowerCase() || "";
+
+    if (action.includes("navigate")) scopes.push("navigation");
+    if (action.includes("click")) scopes.push("interaction");
+    if (action.includes("fill") || action.includes("input")) scopes.push("forms");
+    if (action.includes("screenshot")) scopes.push("evidence");
+    if (action.includes("check") || action.includes("visible")) scopes.push("verification");
+    if (task.includes("login") || task.includes("auth")) scopes.push("authentication");
+    if (task.includes("cart") || task.includes("checkout")) scopes.push("e-commerce");
+
+    return scopes;
   }
 
   /**
@@ -310,12 +343,25 @@ Respond with valid JSON only. No markdown, no explanation.
     const modified: Experience[] = [];
     const deleted: string[] = [];
 
-    // Add new experiences
+    // Add new experiences (with deduplication)
+    const existingExperiences = await expRepo.list();
     for (const toAdd of output.add) {
       // Validate statement length
       const wordCount = toAdd.statement.split(/\s+/).length;
       if (wordCount > 32) {
         console.warn(`[ExperienceExtractor] Skipping experience with ${wordCount} words (max 32)`);
+        continue;
+      }
+
+      // Deduplicate: skip if an identical or very similar statement already exists
+      const normalizedNew = toAdd.statement.toLowerCase().trim();
+      const isDuplicate = existingExperiences.some((existing) => {
+        const normalizedExisting = existing.statement.toLowerCase().trim();
+        return normalizedExisting === normalizedNew;
+      });
+
+      if (isDuplicate) {
+        console.log(`[ExperienceExtractor] Skipping duplicate: "${toAdd.statement.substring(0, 50)}..."`);
         continue;
       }
 
@@ -327,6 +373,7 @@ Respond with valid JSON only. No markdown, no explanation.
       });
 
       added.push(experience);
+      existingExperiences.push(experience); // Track new additions for dedup within same batch
       console.log(`[ExperienceExtractor] Added: "${experience.statement.substring(0, 50)}..."`);
     }
 

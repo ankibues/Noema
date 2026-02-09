@@ -98,7 +98,10 @@ export class SensorHub {
   private readonly logAdapter: LogAdapter;
   private readonly screenshotAdapter: ScreenshotAdapter;
   private readonly observationBus: ObservationBus;
-  private readonly cogneeEnabled: boolean;
+  private cogneeEnabled: boolean;
+  /** Track consecutive Cognee failures — auto-disable after threshold */
+  private static cogneeFailures = 0;
+  private static readonly COGNEE_DISABLE_THRESHOLD = 2;
 
   constructor(config: SensorHubConfig = {}) {
     this.textAdapter = new TextAdapter();
@@ -108,6 +111,11 @@ export class SensorHub {
     });
     this.observationBus = getObservationBus();
     this.cogneeEnabled = config.cogneeEnabled ?? true;
+
+    // Auto-disable Cognee if it has failed too many times (e.g., OpenAI quota exceeded)
+    if (SensorHub.cogneeFailures >= SensorHub.COGNEE_DISABLE_THRESHOLD) {
+      this.cogneeEnabled = false;
+    }
   }
 
   /**
@@ -251,13 +259,19 @@ export class SensorHub {
       const observation = await observationRepo.create(observationInput);
       observations.push(observation);
 
-      // 5. Ingest into Cognee (if enabled)
+      // 5. Ingest into Cognee (if enabled — auto-disables after repeated failures)
       if (this.cogneeEnabled) {
         try {
           await this.ingestToCognee(evidenceId, chunk.content, type, sensor);
+          SensorHub.cogneeFailures = 0; // Reset on success
         } catch (error) {
-          // Log but don't fail - Cognee ingestion is non-critical
-          console.error("[SensorHub] Cognee ingestion failed:", error);
+          SensorHub.cogneeFailures++;
+          if (SensorHub.cogneeFailures >= SensorHub.COGNEE_DISABLE_THRESHOLD) {
+            console.warn(`[SensorHub] Cognee failed ${SensorHub.cogneeFailures} times — auto-disabling for this run`);
+            this.cogneeEnabled = false;
+          } else {
+            console.error("[SensorHub] Cognee ingestion failed:", error);
+          }
         }
       }
 

@@ -211,25 +211,42 @@ async function createGraphEdge(
 }
 
 /**
- * Create edges linking observation to models
+ * Link observation to models by adding the observation to each model's evidence_ids.
+ * This ensures every model tracks which observations contributed to its formation/update.
  */
 export async function linkObservationToModels(
   observationId: string,
   modelIds: string[],
   _relation: "explains" | "extends" = "explains"
 ): Promise<string[]> {
-  const createdIds: string[] = [];
+  const modelRepo = getMentalModelRepository();
+  const linkedIds: string[] = [];
 
   for (const modelId of modelIds) {
-    // We can't directly link observations to models in the current schema
-    // (edges are model-to-model), but we track via evidence_ids
-    // This function is a placeholder for future graph expansion
-    console.log(
-      `[ModelPersister] Observation ${observationId.substring(0, 8)}... linked to model ${modelId.substring(0, 8)}...`
-    );
+    try {
+      const model = await modelRepo.get(modelId);
+      if (!model) continue;
+
+      // Only add if not already linked
+      if (!model.evidence_ids.includes(observationId)) {
+        await modelRepo.update(modelId, {
+          change_summary: `Linked to observation ${observationId.substring(0, 8)}`,
+          evidence_ids: [observationId],
+          updates: {
+            evidence_ids: [...model.evidence_ids, observationId],
+          },
+        });
+        linkedIds.push(modelId);
+        console.log(
+          `[ModelPersister] Observation ${observationId.substring(0, 8)}... linked to model ${modelId.substring(0, 8)}...`
+        );
+      }
+    } catch (error) {
+      console.warn(`[ModelPersister] Failed to link observation to model ${modelId}:`, error);
+    }
   }
 
-  return createdIds;
+  return linkedIds;
 }
 
 /**

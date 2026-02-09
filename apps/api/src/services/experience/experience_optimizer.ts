@@ -38,7 +38,7 @@ const DEFAULT_CONFIG: Required<ExperienceOptimizerConfig> = {
   mockLLM: false,
   llm: {
     provider: "gemini",
-    model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
+    model: process.env.GEMINI_MODEL || "gemini-3-flash-preview",
   },
 };
 

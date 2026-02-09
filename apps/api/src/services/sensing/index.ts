@@ -75,3 +75,12 @@ export {
   normalizeToObservation,
   type NormalizerInput,
 } from "./processors/normalizer.js";
+
+// Vision
+export {
+  analyzeScreenshot,
+  analyzeScreenshotForDecision,
+  isVisionAvailable,
+  type VisionConfig,
+  type VisionAnalysisResult,
+} from "./vision_client.js";

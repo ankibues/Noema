@@ -215,6 +215,13 @@ export class MentalModelRepository extends BaseRepository<MentalModel> {
     const model = await this.get(id);
     return model?.update_history;
   }
+
+  /**
+   * Delete a mental model by ID
+   */
+  async delete(id: string): Promise<boolean> {
+    return this._delete(id);
+  }
 }
 
 // Singleton instance

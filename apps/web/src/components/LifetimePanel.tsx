@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
 import type { NoemaIdentity, NarrationEvent } from "../api/noemaClient";
-import { getMetrics, getImprovement, type RunMetrics } from "../api/noemaClient";
+import {
+  getMetrics,
+  getImprovement,
+  getModels,
+  getExperiences,
+  type RunMetrics,
+  type MentalModelSummary,
+  type ExperienceSummary,
+} from "../api/noemaClient";
 
 interface Props {
   identity: NoemaIdentity | null;
   events: NarrationEvent[];
+  hideHeader?: boolean;
 }
 
 const styles = {
@@ -77,6 +86,49 @@ const styles = {
     borderRadius: 6,
     textAlign: "center" as const,
   },
+  modelCard: {
+    padding: "6px 10px",
+    marginBottom: 4,
+    backgroundColor: "#14101f",
+    border: "1px solid #2d2353",
+    borderRadius: 4,
+  },
+  modelTitle: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#a78bfa",
+    marginBottom: 2,
+  },
+  modelSummary: {
+    fontSize: 10,
+    color: "#9ca3af",
+    lineHeight: 1.4,
+  },
+  experienceCard: {
+    padding: "6px 10px",
+    marginBottom: 4,
+    backgroundColor: "#1a0f1e",
+    border: "1px solid #3d2353",
+    borderRadius: 4,
+  },
+  experienceStatement: {
+    fontSize: 10,
+    color: "#f9a8d4",
+    lineHeight: 1.4,
+  },
+  confidenceBar: (confidence: number) => ({
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: "#1e1e2e",
+    marginTop: 3,
+    overflow: "hidden" as const,
+  }),
+  confidenceFill: (confidence: number) => ({
+    height: "100%",
+    width: `${Math.min(confidence * 100, 100)}%`,
+    backgroundColor: confidence >= 0.7 ? "#22c55e" : confidence >= 0.4 ? "#fbbf24" : "#ef4444",
+    borderRadius: 1,
+  }),
   improvementLine: (improved: boolean) => ({
     fontSize: 12,
     color: improved ? "#34d399" : "#6b7280",
@@ -102,34 +154,46 @@ const styles = {
   },
 };
 
-export default function LifetimePanel({ identity, events }: Props) {
+export default function LifetimePanel({ identity, events, hideHeader }: Props) {
   const [metrics, setMetrics] = useState<RunMetrics[]>([]);
   const [improvement, setImprovement] = useState<any>(null);
+  const [models, setModels] = useState<MentalModelSummary[]>([]);
+  const [experiences, setExperiences] = useState<ExperienceSummary[]>([]);
 
-  // Fetch metrics when events complete
+  // Fetch metrics, models, and experiences when events complete
   useEffect(() => {
     const hasCompleted = events.some((e) => e.type === "run_completed");
     if (hasCompleted || events.length === 0) {
       getMetrics().then(setMetrics).catch(() => {});
       getImprovement().then(setImprovement).catch(() => {});
+      getModels().then(setModels).catch(() => {});
+      getExperiences().then(setExperiences).catch(() => {});
     }
   }, [events]);
+
+  // Also refresh when beliefs/experiences are formed mid-run
+  useEffect(() => {
+    const beliefOrExpEvent = events.filter(
+      (e) => e.type === "belief_formed" || e.type === "experience_learned"
+    );
+    if (beliefOrExpEvent.length > 0) {
+      getModels().then(setModels).catch(() => {});
+      getExperiences().then(setExperiences).catch(() => {});
+    }
+  }, [events.length]);
 
   if (!identity) {
     return (
       <div style={styles.container}>
-        <div style={styles.header}>LIFETIME</div>
+        {!hideHeader && <div style={styles.header}>LIFETIME</div>}
         <div style={styles.empty}>Connecting to NOEMA...</div>
       </div>
     );
   }
 
-  // Experience events from current stream
-  const experienceEvents = events.filter((e) => e.type === "experience_learned");
-
   return (
     <div style={styles.container}>
-      <div style={styles.header}>LIFETIME</div>
+      {!hideHeader && <div style={styles.header}>LIFETIME</div>}
       <div style={styles.body}>
         {/* Identity Statement */}
         <div style={styles.identity}>{identity.statement}</div>
@@ -148,6 +212,61 @@ export default function LifetimePanel({ identity, events }: Props) {
             <div style={styles.bigNumber}>{identity.total_experiences}</div>
             <div style={styles.bigLabel}>EXPERIENCES</div>
           </div>
+        </div>
+
+        {/* Mental Models */}
+        <div style={styles.section}>
+          <div style={styles.sectionTitle}>🧠 Mental Models ({models.length})</div>
+          {models.length === 0 ? (
+            <div style={{ fontSize: 11, color: "#4b5563", padding: "4px 0" }}>
+              No mental models yet. NOEMA will form beliefs as it observes and tests.
+            </div>
+          ) : (
+            models.map((model) => (
+              <div key={model.model_id} style={styles.modelCard}>
+                <div style={styles.modelTitle}>
+                  {model.title}
+                  <span style={{ fontSize: 9, color: "#6b7280", fontWeight: 400, marginLeft: 6 }}>
+                    {model.status} · {(model.confidence * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <div style={styles.modelSummary}>
+                  {model.summary.length > 150 ? model.summary.substring(0, 150) + "..." : model.summary}
+                </div>
+                <div style={styles.confidenceBar(model.confidence)}>
+                  <div style={styles.confidenceFill(model.confidence)} />
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Experiences */}
+        <div style={styles.section}>
+          <div style={styles.sectionTitle}>💡 Learned Experiences ({experiences.length})</div>
+          {experiences.length === 0 ? (
+            <div style={{ fontSize: 11, color: "#4b5563", padding: "4px 0" }}>
+              No experiences yet. NOEMA will learn action heuristics as it tests.
+            </div>
+          ) : (
+            experiences.map((exp) => (
+              <div key={exp.experience_id} style={styles.experienceCard}>
+                <div style={styles.experienceStatement}>
+                  {exp.statement}
+                </div>
+                <div style={{ fontSize: 9, color: "#6b7280", marginTop: 2, display: "flex", gap: 8 }}>
+                  <span>confidence: {(exp.confidence * 100).toFixed(0)}%</span>
+                  <span>applied: {exp.times_applied}×</span>
+                  {exp.source_task && (
+                    <span>scope: {exp.source_task.length > 30 ? exp.source_task.substring(0, 30) + "..." : exp.source_task}</span>
+                  )}
+                </div>
+                <div style={styles.confidenceBar(exp.confidence)}>
+                  <div style={styles.confidenceFill(exp.confidence)} />
+                </div>
+              </div>
+            ))
+          )}
         </div>
 
         {/* Stats */}
@@ -192,18 +311,6 @@ export default function LifetimePanel({ identity, events }: Props) {
                 </div>
               </>
             )}
-          </div>
-        )}
-
-        {/* Recent Experiences */}
-        {experienceEvents.length > 0 && (
-          <div style={styles.section}>
-            <div style={styles.sectionTitle}>Experiences Learned This Run</div>
-            {experienceEvents.map((e, i) => (
-              <div key={i} style={{ fontSize: 12, color: "#f472b6", lineHeight: 1.6, padding: "2px 0" }}>
-                {e.message}
-              </div>
-            ))}
           </div>
         )}
 
