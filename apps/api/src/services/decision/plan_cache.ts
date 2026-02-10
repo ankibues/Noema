@@ -163,7 +163,7 @@ function keywordSimilarity(a: string[], b: string[]): number {
 export async function findCachedPlan(
   url: string,
   goal: string,
-  minScore: number = 0.4
+  minScore: number = 0.6
 ): Promise<PlanCacheMatch | null> {
   const entries = await loadCache();
   if (entries.length === 0) return null;
@@ -177,24 +177,31 @@ export async function findCachedPlan(
     let score = 0;
     const reasons: string[] = [];
 
-    // Domain match is the strongest signal
+    // Goal keyword similarity is the PRIMARY signal — a different goal needs a different plan
+    const kwSim = keywordSimilarity(keywords, entry.goal_keywords);
+
+    // HARD GATE: If goals are too different, skip this entry entirely
+    // even if the URL is the same. "Test authentication" ≠ "Test responsive design"
+    // Threshold raised to 0.4 because generic words (test, web, login, app) inflate similarity
+    if (kwSim < 0.4) {
+      continue;
+    }
+
+    // Domain match
     if (entry.url_domain === domain) {
-      score += 0.5;
+      score += 0.3;
       reasons.push(`Same domain: ${domain}`);
     }
 
-    // Exact URL match adds more
+    // Exact URL match
     if (extractDomain(entry.url) === domain && entry.url === url) {
-      score += 0.2;
+      score += 0.1;
       reasons.push("Exact URL match");
     }
 
-    // Goal keyword similarity
-    const kwSim = keywordSimilarity(keywords, entry.goal_keywords);
-    score += kwSim * 0.3;
-    if (kwSim > 0.3) {
-      reasons.push(`Goal similarity: ${(kwSim * 100).toFixed(0)}%`);
-    }
+    // Goal similarity is now the dominant factor
+    score += kwSim * 0.5;
+    reasons.push(`Goal similarity: ${(kwSim * 100).toFixed(0)}%`);
 
     // Bonus for successful plans
     if (entry.success_rate > 0.5) {

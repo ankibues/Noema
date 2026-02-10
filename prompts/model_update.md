@@ -8,11 +8,12 @@ INPUT:
 
 OUTPUT JSON schema:
 {
-  "create_models": [ { ...MentalModel } ],
+  "create_models": [ { "title": "short descriptive name (REQUIRED)", "domain": "string", "tags": [...], "summary": "...", "core_principles": [...], "assumptions": [...], "procedures": [...], "failure_modes": [...], "diagnostics": [...], "examples": [...], "confidence": 0.5, "evidence_ids": [...] } ],
   "update_models": [
     {
       "model_id": "string",
       "patch": {
+        "title": "string (provide to rename model — e.g. rename 'Untitled Model' to 'Login Flow Testing')",
         "summary": "string",
         "core_principles": ["string"],
         "assumptions": ["string"],
@@ -37,5 +38,7 @@ OUTPUT JSON schema:
 Rules:
 - Prefer updating an existing model if it matches the concept.
 - Create a new model only if concept is novel.
+- Every created model MUST have a descriptive "title" (e.g. "Login Form Behavior", "Cart Validation Rules"). Never leave title empty.
+- When updating, if a model has title "Untitled Model", include a descriptive title in the patch to rename it.
 - delta_confidence must be within [-0.25, +0.15].
 - Keep model fields structured; avoid prose walls.

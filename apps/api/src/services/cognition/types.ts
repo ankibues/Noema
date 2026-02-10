@@ -48,6 +48,7 @@ export interface ModelUpdatePromptInput {
  * Model patch for updates
  */
 export interface ModelPatch {
+  title?: string;
   summary?: string;
   core_principles?: string[];
   assumptions?: string[];

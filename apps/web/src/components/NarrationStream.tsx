@@ -55,9 +55,9 @@ const styles = {
     overflow: "hidden",
   },
   header: {
-    padding: "8px 12px",
-    fontSize: 11,
-    fontWeight: 600,
+    padding: "10px 14px",
+    fontSize: 15,
+    fontWeight: 700,
     color: "#8b5cf6",
     borderBottom: "1px solid #1e1e2e",
     letterSpacing: 1,

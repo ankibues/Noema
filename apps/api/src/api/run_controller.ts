@@ -19,6 +19,7 @@ import { v4 as uuidv4 } from "uuid";
 import {
   getMentalModelRepository,
   getExperienceRepository,
+  getObservationRepository,
   initializeStorage,
 } from "../storage/index.js";
 import {
@@ -342,9 +343,19 @@ async function executeQARun(runId: string, input: QATaskInput, abortSignal: Abor
     // Build the task string from human intent
     const taskString = buildTaskString(input);
 
-    // ─── STEP 1: Seed initial observations ───────────────────────────
+    // ─── STEP 1 + 2: Seed observations AND form initial beliefs ─────
+    // IMPORTANT: Start the ModelUpdateEngine BEFORE ingesting so it
+    // catches observations published to the ObservationBus in real-time.
+    // The bus is pure pub/sub with no message retention.
     state.current_phase = "sensing";
     narration.emit("narration", "I'm analyzing the task to understand what needs to be tested.", runId);
+
+    const modelUpdateEngine = createModelUpdateEngine({
+      mockLLM,
+      salienceThreshold: 0.1,
+      cogneeEnabled,
+    });
+    modelUpdateEngine.start(); // Subscribe BEFORE publishing observations
 
     const sensorHub = createSensorHub({ cogneeEnabled });
     const seedResult = await sensorHub.ingest({
@@ -356,31 +367,41 @@ async function executeQARun(runId: string, input: QATaskInput, abortSignal: Abor
     });
     observationsCreated += seedResult.observationIds.length;
 
-    // ─── STEP 2: Run belief formation on seed ────────────────────────
+    // The ObservationBus.publish() awaits all handlers, so model updates
+    // triggered by ingest are already processed. But give LLM a moment
+    // for any async queued work to finish.
     state.current_phase = "cognition";
     narration.emit("narration", "I'm forming initial beliefs about the task and the target.", runId);
-
-    const modelUpdateEngine = createModelUpdateEngine({
-      mockLLM,
-      salienceThreshold: 0.1,
-      cogneeEnabled,
-    });
-    modelUpdateEngine.start();
-    await sleep(500);
+    await sleep(mockLLM ? 300 : 2000);
     modelUpdateEngine.stop();
 
     const postCognitionModels = await getMentalModelRepository().list();
+
+    // Check for NEW models
     const newModels = postCognitionModels.filter(
       (m) => !initialModels.some((im) => im.model_id === m.model_id)
     );
     modelsCreated = newModels.length;
-
     for (const model of newModels) {
       narration.emit("belief_formed", narrateBeliefFormed(model, true), runId, {
         model_id: model.model_id,
         title: model.title,
         confidence: model.confidence,
       });
+    }
+
+    // Also check for UPDATED models (confidence changes from prior runs)
+    for (const model of postCognitionModels) {
+      const prior = initialModels.find((im) => im.model_id === model.model_id);
+      if (prior && model.confidence !== prior.confidence) {
+        narration.emit("belief_formed", narrateBeliefFormed(model, false), runId, {
+          model_id: model.model_id,
+          title: model.title,
+          old_confidence: prior.confidence,
+          new_confidence: model.confidence,
+        });
+        modelsUpdated++;
+      }
     }
 
     // ─── STEP 3: Generate Test Plan (or reuse from cache) ────────────
@@ -390,16 +411,17 @@ async function executeQARun(runId: string, input: QATaskInput, abortSignal: Abor
     let plan: TestPlan;
     let cachedPlanId: string | undefined;
 
-    // CHECK PLAN CACHE — If we've tested this URL before, reuse the plan
+    // CHECK PLAN CACHE — If we've tested this URL with the SAME goal before, reuse the plan.
+    // The cache requires minimum 25% goal keyword overlap to avoid reusing unrelated plans.
     const cachedMatch = await findCachedPlan(input.url, input.goal);
-    if (cachedMatch && cachedMatch.score >= 0.5) {
+    if (cachedMatch && cachedMatch.score >= 0.6) {
       plan = cachedMatch.cached.plan;
       cachedPlanId = cachedMatch.cached.cache_id;
       planWasReused = true;
       llmCallsSaved += 1; // Saved 1 LLM call for plan generation
 
       narration.emit("narration",
-        `📚 I found a cached test plan from a previous run on this target (${cachedMatch.reason}). ` +
+        `📚 I found a cached test plan from a previous run with a similar goal (${cachedMatch.reason}). ` +
         `Reusing it instead of generating a new one — this saves an LLM call.`,
         runId
       );
@@ -409,7 +431,13 @@ async function executeQARun(runId: string, input: QATaskInput, abortSignal: Abor
         runId
       );
     } else {
-      narration.emit("narration", "I'm creating a test plan before taking any actions.", runId);
+      if (cachedMatch) {
+        narration.emit("narration",
+          `I found a cached plan for this domain but the test goals are different — generating a fresh plan.`,
+          runId
+        );
+      }
+      narration.emit("narration", "I'm creating a new test plan before taking any actions.", runId);
 
       plan = await generateTestPlan(
         {
@@ -527,6 +555,16 @@ async function executeQARun(runId: string, input: QATaskInput, abortSignal: Abor
             llmCallsMade++; // Still counts as 1 call (the LLM may adjust slightly)
 
             const elapsed = formatElapsed(Date.now() - startTime);
+
+            // Emit action_started for cached replays (same as LLM-driven)
+            narration.emit("action_started", narrateActionStarted(result.action), runId, {
+              action_type: result.action.type,
+              action_id: result.action.action_id,
+              plan_step: planStep.step_id,
+              from_memory: true,
+              elapsed,
+            });
+
             narration.emit("action_completed", narrateActionCompleted(result.action, result.outcome), runId, {
               action_id: result.action.action_id,
               status: result.outcome.status,
@@ -550,8 +588,12 @@ async function executeQARun(runId: string, input: QATaskInput, abortSignal: Abor
               stepPassed = true;
             }
 
+            // Emit evidence_captured for screenshots (same as LLM-driven)
             if (result.outcome.artifacts.screenshots.length > 0) {
               stepScreenshots.push(...result.outcome.artifacts.screenshots);
+              narration.emit("evidence_captured", `Captured ${result.outcome.artifacts.screenshots.length} screenshot(s).`, runId, {
+                screenshots: result.outcome.artifacts.screenshots,
+              });
             }
             observationsCreated += result.generatedObservationIds.length;
 
@@ -638,15 +680,30 @@ async function executeQARun(runId: string, input: QATaskInput, abortSignal: Abor
         }
       }
 
-      // ─── Per-step belief update (moved OUT of per-cycle loop for speed) ───
+      // ─── Per-step belief update: directly trigger with step observations ───
+      // Instead of relying on pub/sub timing (which misses observations published
+      // before subscription), we fetch observations from this step and trigger
+      // the model update engine directly.
       const cycleUpdateEngine = createModelUpdateEngine({
         mockLLM,
         salienceThreshold: 0.1,
         cogneeEnabled,
       });
-      cycleUpdateEngine.start();
-      await sleep(200);
-      cycleUpdateEngine.stop();
+      const observationRepo = getObservationRepository();
+      const stepObservations = await observationRepo.findByRun(runId);
+      // Only process observations that haven't been processed by previous steps
+      // (created after this step started)
+      const stepStartISO = new Date(stepStartTime).toISOString();
+      const recentObs = stepObservations.filter(
+        (obs) => obs.timestamp >= stepStartISO
+      );
+      for (const obs of recentObs) {
+        try {
+          await cycleUpdateEngine.triggerUpdate(obs);
+        } catch (err) {
+          console.warn(`[RunController] Model update failed for obs ${obs.observation_id.substring(0, 8)}:`, err);
+        }
+      }
 
       // Check if new beliefs formed after this step
       const currentModels = await getMentalModelRepository().list();
@@ -745,12 +802,21 @@ async function executeQARun(runId: string, input: QATaskInput, abortSignal: Abor
     llmCallsMade = decisionEngine.llmCallCount;
 
     // ─── Save plan to cache for future reuse ──────────────────────
+    // IMPORTANT: Only save freshly-generated plans. If a plan was reused from
+    // cache, we must NOT re-save it under the current goal's keywords — doing so
+    // would contaminate the cache (e.g., a "purchase flow" plan would get tagged
+    // with "error handling" keywords, causing all future "error handling" runs
+    // to replay the wrong plan).
     try {
-      await savePlanToCache(plan, input.url, input.goal, runId);
-      if (cachedPlanId) {
+      if (planWasReused && cachedPlanId) {
+        // Plan was reused — only update execution stats on the ORIGINAL entry
         const passed = plan.steps.filter((s) => s.result === "pass").length;
         const failed = plan.steps.filter((s) => s.result === "fail").length;
         await recordPlanReuse(cachedPlanId, passed, failed);
+        console.log(`[RunController] Plan was reused from cache — updated stats only (not re-saved under new goal)`);
+      } else {
+        // Fresh plan — save to cache for future reuse
+        await savePlanToCache(plan, input.url, input.goal, runId);
       }
     } catch (error) {
       console.warn(`[RunController] Failed to cache plan: ${error}`);
@@ -816,22 +882,40 @@ async function executeQARun(runId: string, input: QATaskInput, abortSignal: Abor
 
     // ─── STEP 5.5: Extract lightweight experiences from successful steps ──
     // (No rollouts needed — just record what worked for this URL/task)
+    // On repeat runs, reinforce existing experiences (boost confidence + add run ID)
     try {
       const expRepo = getExperienceRepository();
       const existingExps = await expRepo.list();
-      const existingStatements = new Set(existingExps.map((e) => e.statement));
+      // Build a map from statement → experience for reinforcement lookup
+      const statementToExp = new Map(existingExps.map((e) => [e.statement, e]));
 
       for (const step of plan.steps) {
         if (step.result === "pass" && step.actions_taken && step.actions_taken > 0) {
           const statement = `For "${step.title}", execute ${step.actions_taken} action(s) using the structured plan approach on ${new URL(input.url).hostname}.`;
-          if (!existingStatements.has(statement)) {
+          const existing = statementToExp.get(statement);
+          if (existing) {
+            // REINFORCE — this experience was confirmed again
+            const reinforced = await expRepo.reinforce(existing.experience_id, runId);
+            if (reinforced) {
+              experiencesAdded++;
+              narration.emit("experience_learned",
+                `Reinforced prior learning: "${reinforced.statement}" (confidence: ${(reinforced.confidence * 100).toFixed(0)}%)`,
+                runId, {
+                  experience_id: reinforced.experience_id,
+                  statement: reinforced.statement,
+                  confidence: reinforced.confidence,
+                  reinforced: true,
+                });
+            }
+          } else {
+            // NEW experience
             const exp = await expRepo.create({
               statement,
               scope: ["qa", classifyTask(input.goal)],
               confidence: 0.75,
               source_runs: [runId],
             });
-            existingStatements.add(statement);
+            statementToExp.set(statement, exp);
             experiencesAdded++;
             narration.emit("experience_learned", narrateExperienceLearned(exp), runId, {
               experience_id: exp.experience_id,
@@ -842,12 +926,26 @@ async function executeQARun(runId: string, input: QATaskInput, abortSignal: Abor
         }
       }
 
-      // Also create a high-level experience about the overall plan
+      // Also create/reinforce a high-level experience about the overall plan
       const passedCount = plan.steps.filter((s) => s.result === "pass").length;
       const totalCount = plan.steps.length;
       if (passedCount > 0) {
         const planStatement = `A ${totalCount}-step test plan for ${new URL(input.url).hostname} achieved ${passedCount}/${totalCount} passing steps.`;
-        if (!existingStatements.has(planStatement)) {
+        const existingPlan = statementToExp.get(planStatement);
+        if (existingPlan) {
+          const reinforced = await expRepo.reinforce(existingPlan.experience_id, runId);
+          if (reinforced) {
+            experiencesAdded++;
+            narration.emit("experience_learned",
+              `Reinforced prior learning: "${reinforced.statement}" (confidence: ${(reinforced.confidence * 100).toFixed(0)}%)`,
+              runId, {
+                experience_id: reinforced.experience_id,
+                statement: reinforced.statement,
+                confidence: reinforced.confidence,
+                reinforced: true,
+              });
+          }
+        } else {
           const planExp = await expRepo.create({
             statement: planStatement,
             scope: ["qa", "planning", classifyTask(input.goal)],

@@ -44,14 +44,14 @@ function PanelExpandBtn({ panelId, maximized, onToggle }: {
         borderRadius: 3,
         color: "#6b7280",
         cursor: "pointer",
-        fontSize: 11,
-        padding: "2px 6px",
+        fontSize: 12,
+        padding: "3px 8px",
         marginLeft: "auto",
         fontFamily: "inherit",
         lineHeight: 1,
         display: "flex",
         alignItems: "center",
-        gap: 3,
+        gap: 4,
         transition: "all 0.15s",
       }}
       onMouseEnter={(e) => { e.currentTarget.style.color = "#d4d4d8"; e.currentTarget.style.borderColor = "#4b5563"; }}
@@ -74,12 +74,12 @@ function PanelWrapper({ panelId, maximized, onToggle, label, labelColor, childre
   return (
     <div style={{ display: "flex", flexDirection: "column", overflow: "hidden", flex: 1 }}>
       <div style={{
-        padding: "8px 12px",
-        fontSize: 11,
-        fontWeight: 600,
+        padding: "10px 14px",
+        fontSize: 15,
+        fontWeight: 700,
         color: labelColor,
         borderBottom: "1px solid #1e1e2e",
-        letterSpacing: 1,
+        letterSpacing: 2,
         display: "flex",
         alignItems: "center",
       }}>
@@ -133,15 +133,15 @@ const styles = {
     gap: "10px",
   },
   logo: {
-    height: "32px",
-    width: "32px",
+    height: "36px",
+    width: "36px",
     objectFit: "contain" as const,
   },
   title: {
-    fontSize: "22px",
+    fontSize: "28px",
     fontWeight: 700,
     color: "#a78bfa",
-    letterSpacing: "3px",
+    letterSpacing: "4px",
   },
   statusDot: (connected: boolean) => ({
     width: 8,
@@ -154,12 +154,16 @@ const styles = {
   taskRow: {
     gridColumn: "1 / -1",
     backgroundColor: "#0a0a0f",
+    border: "2px solid #2e2e42",
+    borderRadius: 6,
   },
   panelCell: {
     backgroundColor: "#0a0a0f",
     overflow: "hidden",
     display: "flex",
     flexDirection: "column" as const,
+    border: "2px solid #2e2e42",
+    borderRadius: 6,
   } as CSSProperties,
 };
 
@@ -398,8 +402,9 @@ export default function App() {
         display: "grid",
         gridTemplateColumns: "1fr",
         gridTemplateRows: "auto 1fr",
-        gap: "1px",
-        backgroundColor: "#1e1e2e",
+        gap: "6px",
+        padding: "6px",
+        backgroundColor: "#0d0d14",
         overflow: "hidden",
       }
     : {
@@ -407,8 +412,9 @@ export default function App() {
         display: "grid",
         gridTemplateColumns: "1fr 1fr",
         gridTemplateRows: "auto 1fr 1fr",
-        gap: "1px",
-        backgroundColor: "#1e1e2e",
+        gap: "6px",
+        padding: "6px",
+        backgroundColor: "#0d0d14",
         overflow: "hidden",
       };
 
@@ -437,12 +443,12 @@ export default function App() {
             <button
               onClick={handleViewReport}
               style={{
-                padding: "4px 12px",
+                padding: "6px 14px",
                 backgroundColor: "#166534",
                 border: "1px solid #22c55e44",
                 borderRadius: 4,
                 color: "#22c55e",
-                fontSize: 11,
+                fontSize: 13,
                 fontFamily: "inherit",
                 cursor: "pointer",
                 fontWeight: 600,
@@ -459,12 +465,12 @@ export default function App() {
               disabled={optimizing}
               title="Run GRPO-style experience optimization: opens new browser sessions, tries alternative approaches, and extracts reusable heuristics for future runs. Takes ~30-45 seconds."
               style={{
-                padding: "4px 12px",
+                padding: "6px 14px",
                 backgroundColor: optimizing ? "#1e1b4b" : "#312e81",
                 border: `1px solid ${optimizing ? "#4338ca44" : "#6366f144"}`,
                 borderRadius: 4,
                 color: optimizing ? "#818cf8" : "#a5b4fc",
-                fontSize: 11,
+                fontSize: 13,
                 fontFamily: "inherit",
                 cursor: optimizing ? "wait" : "pointer",
                 fontWeight: 600,
@@ -476,14 +482,14 @@ export default function App() {
             </button>
           )}
           {optimizeDone && (
-            <span style={{ fontSize: 10, color: "#22c55e" }}>✓ Deep learning done</span>
+            <span style={{ fontSize: 12, color: "#22c55e", fontWeight: 600 }}>✓ Deep learning done</span>
           )}
-          <span style={{ fontSize: 11, color: "#6b7280" }}>
+          <span style={{ fontSize: 12, color: "#6b7280" }}>
             <span style={styles.statusDot(connected)} />
             {connected ? "connected" : "disconnected"}
           </span>
           {identity && (
-            <span style={{ fontSize: 11, color: "#8b5cf6" }}>
+            <span style={{ fontSize: 12, color: "#8b5cf6", fontWeight: 500 }}>
               age: {identity.age} | runs: {identity.total_runs} | experiences: {identity.total_experiences}
             </span>
           )}

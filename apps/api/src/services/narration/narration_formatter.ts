@@ -48,21 +48,58 @@ function maskIfCredential(value: string | undefined): string {
   return value;
 }
 
+/** Convert a CSS selector into a human-readable element name */
+function humanizeSelector(selector: string | undefined): string {
+  if (!selector) return "element";
+  // Try common patterns: #id, button text, aria-label, input[name], etc.
+  // e.g. "#login-button" → "Login Button"
+  // e.g. "button:has-text('Login')" → "Login button"
+  // e.g. "[data-test='submit']" → "submit element"
+
+  // Playwright text selectors: text=Login, button:has-text("Login")
+  const textMatch = selector.match(/(?:has-text|text=)\(?['"]?([^'")\]]+)['"]?\)?/i);
+  if (textMatch) return `"${textMatch[1]}" button`;
+
+  // ID selectors: #login-btn → Login Btn
+  const idMatch = selector.match(/^#([\w-]+)/);
+  if (idMatch) {
+    return idMatch[1].replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  // Attribute selectors: [data-test="submit"], [name="username"]
+  const attrMatch = selector.match(/\[(?:data-\w+|name|aria-label|placeholder)=['"]([^'"]+)['"]\]/);
+  if (attrMatch) return `"${attrMatch[1]}" field`;
+
+  // Tag + class: input.login-field → Login Field input
+  const classMatch = selector.match(/(\w+)\.([\w-]+)/);
+  if (classMatch) {
+    return classMatch[2].replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  // Fallback: if selector is short enough, show it; otherwise just "element"
+  return selector.length <= 40 ? `'${selector}'` : "element";
+}
+
 export function narrateActionStarted(action: BrowserAction): string {
+  const inputs = action.inputs as Record<string, unknown>;
   switch (action.type) {
     case "navigate_to_url":
-      return `I'm navigating to ${(action.inputs as any).url} to observe the page.`;
-    case "click_element":
-      return `I'm clicking on element '${(action.inputs as any).selector}'.`;
+      return `I'm navigating to ${inputs.url} to observe the page.`;
+    case "click_element": {
+      const name = humanizeSelector(inputs.selector as string);
+      return `I'm clicking on ${name}.`;
+    }
     case "fill_input": {
-      const selector = (action.inputs as any).selector || "input";
-      const value = maskIfCredential((action.inputs as any).value);
-      return `I'm filling the input '${selector}' with value "${value}".`;
+      const name = humanizeSelector(inputs.selector as string);
+      const value = maskIfCredential(String(inputs.value || ""));
+      return `I'm filling ${name} with "${value}".`;
     }
     case "submit_form":
       return `I'm submitting a form to trigger a response.`;
-    case "check_element_visible":
-      return `I'm checking if '${(action.inputs as any).selector}' is visible on the page.`;
+    case "check_element_visible": {
+      const name = humanizeSelector(inputs.selector as string);
+      return `I'm checking if ${name} is visible on the page.`;
+    }
     case "capture_screenshot":
       return `I'm capturing a screenshot for evidence.`;
     case "wait_for_network_idle":
@@ -75,20 +112,38 @@ export function narrateActionStarted(action: BrowserAction): string {
 }
 
 export function narrateActionCompleted(action: BrowserAction, outcome: BrowserActionOutcome): string {
+  const inputs = action.inputs as Record<string, unknown>;
   if (outcome.status === "success") {
     switch (action.type) {
       case "navigate_to_url":
-        return `Successfully loaded the page (${outcome.duration_ms}ms).`;
-      case "click_element":
-        return `Clicked the element successfully.`;
+        return `Successfully loaded ${inputs.url || "the page"} (${outcome.duration_ms}ms).`;
+      case "click_element": {
+        const name = humanizeSelector(inputs.selector as string);
+        return `Clicked ${name} successfully.`;
+      }
+      case "fill_input": {
+        const name = humanizeSelector(inputs.selector as string);
+        return `Filled ${name} successfully.`;
+      }
+      case "submit_form":
+        return `Form submitted successfully (${outcome.duration_ms}ms).`;
       case "capture_screenshot":
         return `Screenshot captured — ${outcome.artifacts.screenshots.length} image(s) saved.`;
-      case "check_element_visible":
-        return `Element visibility check completed.`;
+      case "check_element_visible": {
+        const name = humanizeSelector(inputs.selector as string);
+        return `Confirmed ${name} is visible.`;
+      }
+      case "wait_for_network_idle":
+        return `Network stabilized (${outcome.duration_ms}ms).`;
       default:
         return `Action completed successfully in ${outcome.duration_ms}ms.`;
     }
   } else {
+    // Include element info in failure messages too
+    if (action.type === "click_element" || action.type === "fill_input" || action.type === "check_element_visible") {
+      const name = humanizeSelector(inputs.selector as string);
+      return `Failed to interact with ${name}: ${outcome.error_message || "unknown error"}. I'll adjust my approach.`;
+    }
     return `Action failed: ${outcome.error_message || "unknown error"}. I'll note this for future decisions.`;
   }
 }

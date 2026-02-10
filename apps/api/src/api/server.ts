@@ -750,6 +750,44 @@ async function cleanupStaleData(): Promise<void> {
       }
     }
 
+    // Auto-rename "Untitled Model" based on its content
+    let renamedModels = 0;
+    const remainingModels = await modelRepo.list();
+    for (const model of remainingModels) {
+      if (model.title === "Untitled Model" || !model.title) {
+        // Derive a meaningful title from summary, domain, or procedures
+        let newTitle = "Unknown Model";
+        if (model.summary) {
+          // Extract key noun phrases from summary
+          const summaryLower = model.summary.toLowerCase();
+          if (summaryLower.includes("e-commerce") || summaryLower.includes("shopping") || summaryLower.includes("checkout")) {
+            newTitle = "E-Commerce Testing Flow";
+          } else if (summaryLower.includes("login") || summaryLower.includes("authentication")) {
+            newTitle = "Authentication & Login Behavior";
+          } else if (summaryLower.includes("form") || summaryLower.includes("validation")) {
+            newTitle = "Form Validation Rules";
+          } else if (summaryLower.includes("navigation") || summaryLower.includes("routing")) {
+            newTitle = "Page Navigation Patterns";
+          } else {
+            // Use first meaningful chunk of summary as title
+            const firstSentence = model.summary.split(/[.!?]/)[0].trim();
+            if (firstSentence.length > 10 && firstSentence.length < 60) {
+              newTitle = firstSentence;
+            } else if (model.domain !== "general") {
+              newTitle = `${model.domain.replace(/_/g, " ")} Model`;
+            }
+          }
+        }
+        await modelRepo.update(model.model_id, {
+          updates: { title: newTitle },
+          change_summary: `Auto-renamed from "Untitled Model" to "${newTitle}"`,
+          evidence_ids: [],
+        });
+        console.log(`[DataHygiene] Renamed "Untitled Model" → "${newTitle}"`);
+        renamedModels++;
+      }
+    }
+
     // Clean up duplicate experiences (keep first, remove duplicates)
     const expRepo = getExperienceRepository();
     const experiences = await expRepo.list();

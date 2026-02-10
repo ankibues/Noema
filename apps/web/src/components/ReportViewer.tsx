@@ -29,8 +29,8 @@ const styles = {
   },
   header: {
     padding: "10px 14px",
-    fontSize: 11,
-    fontWeight: 600,
+    fontSize: 15,
+    fontWeight: 700,
     color: "#22c55e",
     borderBottom: "1px solid #1e1e2e",
     letterSpacing: 1,
@@ -119,8 +119,8 @@ const styles = {
     marginBottom: 16,
   },
   sectionTitle: {
-    fontSize: 11,
-    fontWeight: 600,
+    fontSize: 13,
+    fontWeight: 700,
     color: "#8b5cf6",
     marginBottom: 8,
     letterSpacing: 1,

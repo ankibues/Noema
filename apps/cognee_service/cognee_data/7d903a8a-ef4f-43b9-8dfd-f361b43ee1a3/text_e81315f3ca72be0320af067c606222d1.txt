@@ -1,4 +1,0 @@
-[text] [source: text_adapter]
-QA Task: Test the Login, Production selection, Cart and Checkout functionality of this web.
-Target URL: https://www.saucedemo.com/
-Scenarios:

@@ -90,6 +90,9 @@ export async function persistModelUpdates(
     // Build update with patch
     const updates: Partial<MentalModel> = {};
 
+    if (instruction.patch.title) {
+      updates.title = instruction.patch.title;
+    }
     if (instruction.patch.summary) {
       updates.summary = instruction.patch.summary;
     }

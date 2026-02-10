@@ -250,8 +250,7 @@ NOEMA starts fresh — new identity, no prior knowledge. Useful for demo resets.
 
 1. **Enter a Goal** — Describe what you want NOEMA to test (e.g., "Test the login flow of this web app")
 2. **Enter a URL** — The target web application URL
-3. **Toggle Mock Mode** — Check "mock" to use simulated LLM responses (faster, no API key needed). Uncheck for real Gemini 3 LLM calls.
-4. **Click RUN** — NOEMA starts immediately
+3. **Click RUN** — NOEMA starts immediately
 
 ### What Happens During a Run
 
@@ -339,7 +338,7 @@ curl http://localhost:8200/improvement
 | `critical_scenarios` | string[] | `[]` | Specific scenarios to focus on |
 | `max_cycles_per_step` | number | `3` | Max decision-action cycles per plan step |
 | `max_total_actions` | number | `15` | Max total actions across all steps |
-| `mock_llm` | boolean | auto | `false` if `GEMINI_API_KEY` is set, `true` otherwise |
+| `mock_llm` | boolean | auto | Auto-detected: `false` if `GEMINI_API_KEY` is set, `true` otherwise. Not exposed in UI. |
 | `visible_browser` | boolean | `false` | Show Playwright browser window |
 | `enable_optimization` | boolean | `true` | Run experience optimization after actions |
 
@@ -476,7 +475,7 @@ cd apps/web && npm run dev
 1. Open http://localhost:3000
 2. Goal: `Test the login flow`
 3. URL: `https://the-internet.herokuapp.com/login`
-4. Ensure mock is unchecked → Click **RUN**
+4. Click **RUN**
 5. Watch: narration, actions, belief formation
 6. Note: Lifetime shows "1 run" — no prior experience
 

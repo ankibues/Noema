@@ -56,9 +56,11 @@ const styles = {
     transition: "background-color 0.2s",
   }),
   label: {
-    fontSize: 11,
-    color: "#6b7280",
-    marginRight: 4,
+    fontSize: 13,
+    fontWeight: 600,
+    color: "#9ca3af",
+    marginRight: 6,
+    letterSpacing: 1,
   },
 };
 

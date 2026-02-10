@@ -228,11 +228,38 @@ function parseModelUpdateResponse(response: string): ModelUpdatePromptOutput {
 /**
  * Validate create model instructions
  */
+/** Generate a meaningful title from summary/tags when LLM doesn't provide one */
+function generateTitleFromContext(model: Record<string, unknown>): string {
+  // Try to derive a title from summary
+  if (model.summary && typeof model.summary === "string" && model.summary.length > 0) {
+    // Take first sentence or first 60 chars, capitalize
+    const summary = model.summary.trim();
+    const firstSentence = summary.split(/[.!?]/)[0].trim();
+    if (firstSentence.length > 5 && firstSentence.length <= 60) {
+      return firstSentence;
+    }
+    // Shorten if too long
+    return summary.substring(0, 50).trim() + "…";
+  }
+  // Try to derive from tags
+  if (Array.isArray(model.tags) && model.tags.length > 0) {
+    return model.tags.slice(0, 3).map(String).join(" / ");
+  }
+  // Try domain
+  if (model.domain && typeof model.domain === "string") {
+    return `${model.domain} Model`;
+  }
+  return "Observed Behavior Pattern";
+}
+
 function validateCreateModels(models: unknown[]): ModelCreateInstruction[] {
   return models.map((m) => {
     const model = m as Record<string, unknown>;
+    const title = model.title && String(model.title).trim().length > 0
+      ? String(model.title)
+      : generateTitleFromContext(model);
     return {
-      title: String(model.title || "Untitled Model"),
+      title,
       domain: validateDomain(model.domain),
       tags: Array.isArray(model.tags) ? model.tags.map(String) : [],
       summary: String(model.summary || ""),
@@ -273,6 +300,7 @@ function validateUpdateModels(updates: unknown[]): ModelUpdateInstruction[] {
     return {
       model_id: String(update.model_id || ""),
       patch: {
+        title: patch.title ? String(patch.title) : undefined,
         summary: patch.summary ? String(patch.summary) : undefined,
         core_principles: Array.isArray(patch.core_principles)
           ? patch.core_principles.map(String)
